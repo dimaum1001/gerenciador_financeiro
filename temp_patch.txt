@@ -1,0 +1,39 @@
+*** Update File: backend/app/schemas/auth.py
+@@
+-from typing import Optional
+-from pydantic import BaseModel, EmailStr, Field, ConfigDict
++from typing import Optional
++from pydantic import BaseModel, EmailStr, Field, ConfigDict, AliasChoices
+@@
+-class LoginRequest(BaseModel):
+-    """Schema para requisi??uo de login"""
+-    email: EmailStr = Field(..., description="Email do usuorio")
+-    senha: str = Field(..., description="Senha do usuorio")
+-    
+-    model_config = ConfigDict(
+-        json_schema_extra={
+-            "example": {
+-                "email": "admin@demo.com",
+-                "senha": "admin123"
+-            }
+-        }
+-    )
++class LoginRequest(BaseModel):
++    """Schema para requisi??uo de login"""
++    email: EmailStr = Field(..., description="Email do usuorio")
++    senha: str = Field(
++        ...,
++        description="Senha do usuorio",
++        validation_alias=AliasChoices("senha", "password"),
++    )
++
++    model_config = ConfigDict(
++        populate_by_name=True,
++        json_schema_extra={
++            "example": {
++                "email": "admin@demo.com",
++                "senha": "admin123"
++            }
++        }
++    )
+*** End Patch

@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useApi } from './ApiContext'
 
 const AuthContext = createContext({})
@@ -7,19 +8,20 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const { api } = useApi()
+  const queryClient = useQueryClient()
 
   // Verificar token salvo no localStorage
   useEffect(() => {
     const token = localStorage.getItem('finance_token')
     if (token) {
-      // Verificar se o token é válido
+      api.defaults.headers.common['Authorization'] = `Bearer ${token}`
+      // Verificar se o token Ǹ vǭlido
       api.get('/auth/me')
         .then(response => {
           setUser(response.data)
-          api.defaults.headers.common['Authorization'] = `Bearer ${token}`
         })
         .catch(() => {
-          // Token inválido, remover
+          // Token invǭlido, remover
           localStorage.removeItem('finance_token')
           delete api.defaults.headers.common['Authorization']
         })
@@ -35,11 +37,12 @@ export function AuthProvider({ children }) {
     try {
       const response = await api.post('/auth/login', { email, senha })
       const { access_token, user: userData } = response.data
-      
+
       // Salvar token
       localStorage.setItem('finance_token', access_token)
       api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`
-      
+      queryClient.clear()
+
       setUser(userData)
       return { success: true }
     } catch (error) {
@@ -52,6 +55,7 @@ export function AuthProvider({ children }) {
   const logout = () => {
     localStorage.removeItem('finance_token')
     delete api.defaults.headers.common['Authorization']
+    queryClient.clear()
     setUser(null)
   }
 

@@ -359,3 +359,7 @@ dist/
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# Allow frontend utility library
+!frontend/finance-manager-web/src/lib/
+!frontend/finance-manager-web/src/lib/**

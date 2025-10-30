@@ -20,6 +20,7 @@ if not _BACKEND_DIR.exists():
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
-from app.main import app  # noqa: E402  # pylint: disable=wrong-import-position
+# Importa o objeto FastAPI da aplicação principal.
+from backend.app.main import app  # noqa: E402  # pylint: disable=wrong-import-position
 
 __all__ = ["app"]

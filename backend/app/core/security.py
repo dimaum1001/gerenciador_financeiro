@@ -9,15 +9,39 @@ import uuid
 import structlog
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-import bcrypt as pybcrypt
 from fastapi import HTTPException, status
 from pydantic import ValidationError
 
 from app.core.config import settings
 
+try:
+    import bcrypt as pybcrypt  # type: ignore
+    try:
+        import _bcrypt as ext_bcrypt  # type: ignore
+    except ImportError:  # pragma: no cover
+        ext_bcrypt = None
+
+    if not hasattr(pybcrypt, "__about__"):
+        class _About:
+            __slots__ = ()
+            __version__ = getattr(pybcrypt, "__version__", "unknown")
+
+        pybcrypt.__about__ = _About()  # type: ignore[attr-defined]
+
+    if ext_bcrypt is not None and not hasattr(ext_bcrypt, "__about__"):
+        ext_bcrypt.__about__ = pybcrypt.__about__  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover
+    pybcrypt = None  # type: ignore
+    ext_bcrypt = None  # type: ignore
+
 
 # Contexto para hash de senhas (usa bcrypt reforçado com SHA-256 para evitar limite de 72 bytes)
-pwd_context = CryptContext(schemes=["bcrypt_sha256"], deprecated="auto")
+pwd_context = CryptContext(
+    schemes=["bcrypt_sha256", "bcrypt"],
+    deprecated="auto",
+    bcrypt_sha256__truncate_error=False,
+    bcrypt__truncate_error=False,
+)
 logger = structlog.get_logger(__name__)
 
 
@@ -112,12 +136,46 @@ def verify_password_legacy(plain_password: str, hashed_password: str) -> bool:
     Returns:
         True se a senha corresponde ao hash legacy, False caso contrário
     """
+    if pybcrypt is None:
+        return False
+
     try:
+        if hashed_password.startswith("$bcrypt-sha256$"):
+            # Replicar verificação bcrypt_sha256 manualmente
+            parts = hashed_password.split("$", 4)
+            if len(parts) < 5:
+                return False
+            _, scheme, params, salt, checksum = parts
+            if "t=" not in params:
+                return False
+            rounds = params.split(",")
+            ident = next((item.split("=")[1] for item in rounds if item.startswith("t=")), "2b")
+            cost = next((item.split("=")[1] for item in rounds if item.startswith("r=")), "12")
+            version = next((item.split("=")[1] for item in rounds if item.startswith("v=")), "2")
+            if version != "2":
+                return False
+
+            import hashlib
+            import hmac
+            import base64
+
+            salt_token = salt.encode("ascii")
+            digest = hmac.new(
+                key=salt_token,
+                msg=plain_password.encode("utf-8"),
+                digestmod=hashlib.sha256,
+            ).digest()
+            key = base64.b64encode(digest)
+
+            config = f"${ident}${int(cost):02d}${salt}".encode("ascii")
+            candidate = pybcrypt.hashpw(key, config).decode("ascii")[-31:]
+            return candidate == checksum
+
         password_bytes = plain_password.encode("utf-8")
         if len(password_bytes) > 72:
             password_bytes = password_bytes[:72]
         return pybcrypt.checkpw(password_bytes, hashed_password.encode("utf-8"))
-    except ValueError as exc:
+    except Exception as exc:  # pragma: no cover - log e seguir
         logger.debug(
             "Legacy password verification failed",
             error=str(exc),

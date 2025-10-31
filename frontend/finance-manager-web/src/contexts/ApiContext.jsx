@@ -3,9 +3,27 @@ import axios from 'axios'
 
 const ApiContext = createContext({})
 
+const rawBaseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1').trim()
+const apiVersionPattern = /\/api\/v\d+$/i
+
+const sanitizedBaseUrl = rawBaseUrl.replace(/\/+$/, '')
+let apiPrefix = import.meta.env.VITE_API_PREFIX
+  ? `/${import.meta.env.VITE_API_PREFIX.replace(/^\/+|\/+$/g, '')}`
+  : '/api/v1'
+
+if (apiPrefix === '/') {
+  apiPrefix = ''
+}
+
+if (apiVersionPattern.test(sanitizedBaseUrl)) {
+  apiPrefix = ''
+} else if (!import.meta.env.VITE_API_PREFIX) {
+  apiPrefix = '/api/v1'
+}
+
 // Configurar instância do axios
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1',
+  baseURL: sanitizedBaseUrl,
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json',
@@ -15,6 +33,15 @@ const api = axios.create({
 // Interceptor para requests
 api.interceptors.request.use(
   (config) => {
+    if (config.url && !/^https?:\/\//i.test(config.url)) {
+      const normalizedPath = config.url.startsWith('/') ? config.url : `/${config.url}`
+      if (apiPrefix && !normalizedPath.startsWith(`${apiPrefix}/`)) {
+        config.url = `${apiPrefix}${normalizedPath}`
+      } else {
+        config.url = normalizedPath
+      }
+    }
+
     // Adicionar timestamp para evitar cache
     config.params = {
       ...config.params,

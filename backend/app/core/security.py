@@ -6,8 +6,10 @@ from datetime import datetime, timedelta
 from typing import Optional, Union
 import uuid
 
+import structlog
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+from passlib.hash import bcrypt
 from fastapi import HTTPException, status
 from pydantic import ValidationError
 
@@ -16,6 +18,7 @@ from app.core.config import settings
 
 # Contexto para hash de senhas (usa bcrypt reforçado com SHA-256 para evitar limite de 72 bytes)
 pwd_context = CryptContext(schemes=["bcrypt_sha256"], deprecated="auto")
+logger = structlog.get_logger(__name__)
 
 
 def create_access_token(
@@ -96,6 +99,27 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         True se as senhas correspondem, False caso contrário
     """
     return pwd_context.verify(plain_password, hashed_password)
+
+
+def verify_password_legacy(plain_password: str, hashed_password: str) -> bool:
+    """
+    Verifica senhas usando hashes legacy (bcrypt sem pré-hash SHA256).
+    
+    Args:
+        plain_password: Senha em texto plano
+        hashed_password: Hash armazenado
+        
+    Returns:
+        True se a senha corresponde ao hash legacy, False caso contrário
+    """
+    try:
+        return bcrypt.verify(plain_password[:72], hashed_password)
+    except ValueError as exc:
+        logger.debug(
+            "Legacy password verification failed",
+            error=str(exc),
+        )
+        return False
 
 
 def get_password_hash(password: str) -> str:

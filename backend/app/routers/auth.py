@@ -5,25 +5,34 @@ Router de autenticação
 from datetime import datetime, timedelta
 from typing import Any
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.security import (
-    create_access_token, verify_password, get_password_hash,
-    generate_password_reset_token, verify_password_reset_token
+    create_access_token,
+    verify_password,
+    verify_password_legacy,
+    get_password_hash,
+    generate_password_reset_token,
+    verify_password_reset_token,
 )
 from app.core.deps import get_db, get_current_user
 from app.models.user import User
 from app.schemas.auth import (
-    LoginRequest, LoginResponse, PasswordResetRequest, 
-    PasswordResetConfirm, ApiKeyResponse
+    LoginRequest,
+    LoginResponse,
+    PasswordResetRequest,
+    PasswordResetConfirm,
+    ApiKeyResponse,
 )
 from app.schemas.user import UserResponse
 
 
 router = APIRouter()
+logger = structlog.get_logger(__name__)
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -53,12 +62,34 @@ def login(
             detail="Incorrect email or password"
         )
     
-    # Verificar senha
-    if not verify_password(login_data.senha, user.senha_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password"
+    # Verificar senha (com fallback para hashes legados)
+    password_rehashed = False
+    try:
+        password_valid = verify_password(login_data.senha, user.senha_hash)
+    except ValueError as exc:
+        logger.warning(
+            "Password verification error",
+            user_id=str(user.id),
+            email=user.email,
+            error=str(exc),
         )
+        password_valid = False
+
+    if not password_valid:
+        if verify_password_legacy(login_data.senha, user.senha_hash):
+            password_valid = True
+            user.senha_hash = get_password_hash(login_data.senha)
+            password_rehashed = True
+            logger.info(
+                "Upgraded legacy password hash",
+                user_id=str(user.id),
+                email=user.email,
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password"
+            )
     
     # Verificar se usuário está ativo
     if not user.ativo:

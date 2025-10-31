@@ -2,33 +2,12 @@
 Configurações da aplicação usando Pydantic Settings v2
 """
 
-import os
 import json
-from typing import Any, List, Optional
+from typing import List, Optional
 from functools import lru_cache
 
-from pydantic import Field, validator
+from pydantic import Field, validator, PrivateAttr, AliasChoices
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-
-def _flexible_json_loads(value: Any) -> Any:
-    """
-    Permite que variáveis de ambiente complexas sejam carregadas como JSON quando possível,
-    mantendo suporte a valores simples (strings separadas por vírgula, vazio, etc.).
-    """
-    if value is None or isinstance(value, (list, dict)):
-        return value
-
-    if isinstance(value, str):
-        stripped = value.strip()
-        if not stripped:
-            return ""
-        try:
-            return json.loads(stripped)
-        except json.JSONDecodeError:
-            return stripped
-
-    return value
 
 
 class Settings(BaseSettings):
@@ -53,25 +32,13 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     
     # CORS
-    cors_origins: List[str] = Field(default=["http://localhost:5173"], env="CORS_ORIGINS")
-    
-    @validator("cors_origins", pre=True)
-    def parse_cors_origins(cls, v):
-        if isinstance(v, str):
-            value = v.strip()
-            if value.startswith("[") and value.endswith("]"):
-                try:
-                    parsed = json.loads(value)
-                    if isinstance(parsed, list):
-                        return [str(origin).strip() for origin in parsed]
-                except json.JSONDecodeError:
-                    pass
-            return [
-                origin.strip().strip("\"'")
-                for origin in value.split(",")
-                if origin.strip()
-            ]
-        return v
+    cors_origins_raw: Optional[str] = Field(
+        default=None,
+        env="CORS_ORIGINS",
+        validation_alias=AliasChoices("cors_origins", "CORS_ORIGINS"),
+        repr=False,
+    )
+    _cors_origins: List[str] = PrivateAttr(default_factory=lambda: ["http://localhost:5173"])
     
     # Logging
     log_level: str = Field(default="INFO", env="LOG_LEVEL")
@@ -126,32 +93,47 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    @staticmethod
-    def _wrap_source(source):
-        def _inner():
-            data = source()
-            if not data:
-                return data
-            return {key: _flexible_json_loads(value) for key, value in data.items()}
-        return _inner
+    def model_post_init(self, __context) -> None:
+        parsed = self._parse_cors_origins(self.cors_origins_raw)
+        if parsed:
+            object.__setattr__(self, "_cors_origins", parsed)
 
-    @classmethod
-    def settings_customise_sources(
-        cls,
-        settings_cls,
-        init_settings,
-        env_settings,
-        dotenv_settings,
-        file_secret_settings,
-    ):
-        wrapped_env = cls._wrap_source(env_settings) if env_settings else env_settings
-        wrapped_dotenv = cls._wrap_source(dotenv_settings) if dotenv_settings else dotenv_settings
-        return (
-            init_settings,
-            wrapped_env,
-            wrapped_dotenv,
-            file_secret_settings,
-        )
+    @staticmethod
+    def _parse_cors_origins(value: Optional[str]) -> List[str]:
+        if not value:
+            return []
+
+        stripped = value.strip()
+        if not stripped:
+            return []
+
+        if stripped.startswith("[") and stripped.endswith("]"):
+            try:
+                parsed = json.loads(stripped)
+                if isinstance(parsed, list):
+                    return [
+                        str(origin).strip()
+                        for origin in parsed
+                        if str(origin).strip()
+                    ]
+            except json.JSONDecodeError:
+                pass
+
+        normalized = stripped.replace("\n", ",")
+        origins: List[str] = []
+        for part in normalized.split(","):
+            token = part.strip().strip("\"'")
+            if token:
+                origins.append(token)
+        return origins
+
+    @property
+    def cors_origins(self) -> List[str]:
+        return self._cors_origins
+
+    @cors_origins.setter
+    def cors_origins(self, value: List[str]) -> None:
+        object.__setattr__(self, "_cors_origins", value)
     
     @property
     def is_development(self) -> bool:

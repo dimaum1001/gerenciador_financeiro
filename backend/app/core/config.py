@@ -4,11 +4,31 @@ Configurações da aplicação usando Pydantic Settings v2
 
 import os
 import json
-from typing import List, Optional
+from typing import Any, List, Optional
 from functools import lru_cache
 
 from pydantic import Field, validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _flexible_json_loads(value: Any) -> Any:
+    """
+    Permite que variáveis de ambiente complexas sejam carregadas como JSON quando possível,
+    mantendo suporte a valores simples (strings separadas por vírgula, vazio, etc.).
+    """
+    if value is None or isinstance(value, (list, dict)):
+        return value
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return ""
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            return stripped
+
+    return value
 
 
 class Settings(BaseSettings):
@@ -100,10 +120,38 @@ class Settings(BaseSettings):
     backup_schedule: str = Field(default="0 2 * * *", env="BACKUP_SCHEDULE")
     backup_retention_days: int = Field(default=30, env="BACKUP_RETENTION_DAYS")
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+    )
+
+    @staticmethod
+    def _wrap_source(source):
+        def _inner():
+            data = source()
+            if not data:
+                return data
+            return {key: _flexible_json_loads(value) for key, value in data.items()}
+        return _inner
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls,
+        init_settings,
+        env_settings,
+        dotenv_settings,
+        file_secret_settings,
+    ):
+        wrapped_env = cls._wrap_source(env_settings) if env_settings else env_settings
+        wrapped_dotenv = cls._wrap_source(dotenv_settings) if dotenv_settings else dotenv_settings
+        return (
+            init_settings,
+            wrapped_env,
+            wrapped_dotenv,
+            file_secret_settings,
+        )
     
     @property
     def is_development(self) -> bool:

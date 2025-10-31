@@ -9,7 +9,7 @@ import uuid
 import structlog
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from passlib.hash import bcrypt
+import bcrypt as pybcrypt
 from fastapi import HTTPException, status
 from pydantic import ValidationError
 
@@ -113,7 +113,10 @@ def verify_password_legacy(plain_password: str, hashed_password: str) -> bool:
         True se a senha corresponde ao hash legacy, False caso contrário
     """
     try:
-        return bcrypt.verify(plain_password[:72], hashed_password)
+        password_bytes = plain_password.encode("utf-8")
+        if len(password_bytes) > 72:
+            password_bytes = password_bytes[:72]
+        return pybcrypt.checkpw(password_bytes, hashed_password.encode("utf-8"))
     except ValueError as exc:
         logger.debug(
             "Legacy password verification failed",

@@ -136,18 +136,18 @@ def verify_password_legacy(plain_password: str, hashed_password: str) -> bool:
     Returns:
         True se a senha corresponde ao hash legacy, False caso contrário
     """
-    if pybcrypt is None:
-        return False
-
     try:
+        if pybcrypt is None:
+            return False
+
         if hashed_password.startswith("$bcrypt-sha256$"):
-            # Replicar verificação bcrypt_sha256 manualmente
             parts = hashed_password.split("$", 4)
             if len(parts) < 5:
                 return False
-            _, scheme, params, salt, checksum = parts
+            _, _, params, salt, checksum = parts
             if "t=" not in params:
                 return False
+
             rounds = params.split(",")
             ident = next((item.split("=")[1] for item in rounds if item.startswith("t=")), "2b")
             cost = next((item.split("=")[1] for item in rounds if item.startswith("r=")), "12")
@@ -168,7 +168,16 @@ def verify_password_legacy(plain_password: str, hashed_password: str) -> bool:
             key = base64.b64encode(digest)
 
             config = f"${ident}${int(cost):02d}${salt}".encode("ascii")
-            candidate = pybcrypt.hashpw(key, config).decode("ascii")[-31:]
+            try:
+                candidate = pybcrypt.hashpw(key, config).decode("ascii")[-31:]
+            except ValueError as exc:
+                logger.debug(
+                    "bcrypt_sha256 legacy hash check failed",
+                    config=config.decode("ascii"),
+                    config_len=len(config),
+                    error=str(exc),
+                )
+                return False
             return candidate == checksum
 
         password_bytes = plain_password.encode("utf-8")
@@ -181,6 +190,29 @@ def verify_password_legacy(plain_password: str, hashed_password: str) -> bool:
             error=str(exc),
         )
         return False
+
+
+def verify_password_with_upgrade(
+    plain_password: str,
+    hashed_password: str,
+) -> tuple[bool, bool]:
+    """
+    Verifica senha e indica se o hash precisa ser atualizado.
+
+    Retorna (is_valid, needs_upgrade).
+    """
+    if hashed_password.startswith("$bcrypt-sha256$"):
+        return verify_password_legacy(plain_password, hashed_password), False
+
+    try:
+        return pwd_context.verify(plain_password, hashed_password), False
+    except ValueError as exc:
+        logger.warning(
+            "Password verification error",
+            error=str(exc),
+        )
+        is_valid = verify_password_legacy(plain_password, hashed_password)
+        return is_valid, is_valid
 
 
 def get_password_hash(password: str) -> str:

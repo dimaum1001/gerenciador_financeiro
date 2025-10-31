@@ -13,8 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.security import (
     create_access_token,
-    verify_password,
-    verify_password_legacy,
+    verify_password_with_upgrade,
     get_password_hash,
     generate_password_reset_token,
     verify_password_reset_token,
@@ -62,34 +61,24 @@ def login(
             detail="Incorrect email or password"
         )
     
-    # Verificar senha (com fallback para hashes legados)
-    password_rehashed = False
-    try:
-        password_valid = verify_password(login_data.senha, user.senha_hash)
-    except ValueError as exc:
-        logger.warning(
-            "Password verification error",
-            user_id=str(user.id),
-            email=user.email,
-            error=str(exc),
-        )
-        password_valid = False
+    password_valid, needs_upgrade = verify_password_with_upgrade(
+        login_data.senha,
+        user.senha_hash,
+    )
 
     if not password_valid:
-        if verify_password_legacy(login_data.senha, user.senha_hash):
-            password_valid = True
-            user.senha_hash = get_password_hash(login_data.senha)
-            password_rehashed = True
-            logger.info(
-                "Upgraded legacy password hash",
-                user_id=str(user.id),
-                email=user.email,
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect email or password"
-            )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password"
+        )
+
+    if needs_upgrade:
+        user.senha_hash = get_password_hash(login_data.senha)
+        logger.info(
+            "Upgraded legacy password hash",
+            user_id=str(user.id),
+            email=user.email,
+        )
     
     # Verificar se usuário está ativo
     if not user.ativo:

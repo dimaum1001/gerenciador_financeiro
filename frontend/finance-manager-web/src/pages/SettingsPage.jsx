@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -8,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Separator } from '@/components/ui/separator'
 import { Badge } from '@/components/ui/badge'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { 
   User, 
   Bell, 
@@ -19,15 +21,27 @@ import {
   Trash2,
   Save,
   Eye,
-  EyeOff
+  EyeOff,
+  Loader2
 } from 'lucide-react'
+import { formatCurrency } from '@/lib/formatters'
+import { useApi } from '@/contexts/ApiContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { useTheme } from '@/components/theme-provider'
 
 export default function SettingsPage() {
   const { user } = useAuth()
   const { theme, setTheme } = useTheme()
+  const { api } = useApi()
+  const queryClient = useQueryClient()
   const [showPassword, setShowPassword] = useState(false)
+  const [importAccount, setImportAccount] = useState('')
+  const [importFile, setImportFile] = useState(null)
+  const [importDryRun, setImportDryRun] = useState(true)
+  const [importResult, setImportResult] = useState(null)
+  const [importError, setImportError] = useState('')
+  const [importLoading, setImportLoading] = useState(false)
+  const [lastImportDryRun, setLastImportDryRun] = useState(true)
   
   // Estados para as configurações
   const [profile, setProfile] = useState({
@@ -55,6 +69,117 @@ export default function SettingsPage() {
     two_factor: false,
     login_notifications: true
   })
+
+  const accountsQuery = useQuery({
+    queryKey: ['accounts', 'import'],
+    queryFn: async () => {
+      const response = await api.get('/accounts', { params: { limit: 500, skip: 0 } })
+      return response.data.accounts ?? []
+    }
+  })
+
+  const accounts = accountsQuery.data ?? []
+  const hasAccounts = accounts.length > 0
+
+  const normalizeErrorDetail = (detail) => {
+    if (!detail) return ''
+    if (typeof detail === 'string') return detail
+    if (Array.isArray(detail)) {
+      return detail
+        .map((item) => {
+          if (!item) return null
+          if (typeof item === 'string') return item
+          const message = item.msg || item.message || item.detail
+          const loc = Array.isArray(item.loc) ? item.loc.join(' > ') : item.loc
+          if (message && loc) return `${message} (${loc})`
+          if (message) return message
+          try {
+            return JSON.stringify(item)
+          } catch {
+            return null
+          }
+        })
+        .filter(Boolean)
+        .join(' | ')
+    }
+    if (typeof detail === 'object') {
+      const message = detail.msg || detail.message || detail.detail
+      if (message) return message
+      try {
+        return JSON.stringify(detail)
+      } catch {
+        return ''
+      }
+    }
+    return String(detail)
+  }
+
+  const buildImportErrorMessage = (error) => {
+    const fallback = 'Não foi possível importar o arquivo.'
+    if (!error) return fallback
+    const detail = error.response?.data?.detail ?? error.message ?? error
+    const normalized = normalizeErrorDetail(detail)
+    return normalized || fallback
+  }
+
+  const handleImportFileChange = (event) => {
+    const file = event.target.files?.[0]
+    setImportFile(file || null)
+  }
+
+  const executeImport = async ({ forceDryRun } = {}) => {
+    setImportError('')
+    setImportResult(null)
+    
+    if (!importAccount) {
+      setImportError('Selecione a conta que receberá as transações importadas.')
+      return
+    }
+    
+    if (!importFile) {
+      setImportError('Selecione o arquivo .xlsx gerado pelo modelo.')
+      return
+    }
+    
+    setImportLoading(true)
+    try {
+      const effectiveDryRun = typeof forceDryRun === 'boolean' ? forceDryRun : importDryRun
+      const formData = new FormData()
+      formData.append('account_id', importAccount)
+      formData.append('dry_run', effectiveDryRun ? 'true' : 'false')
+      formData.append('file', importFile)
+      
+      const response = await api.post('/transactions/import', formData)
+      setImportResult(response.data)
+      setLastImportDryRun(effectiveDryRun)
+      
+      if (!effectiveDryRun) {
+        queryClient.invalidateQueries(['transactions'])
+        queryClient.invalidateQueries(['dashboard'])
+        queryClient.invalidateQueries(['accounts'])
+        setImportFile(null)
+      }
+    } catch (error) {
+      setImportError(buildImportErrorMessage(error))
+    } finally {
+      setImportLoading(false)
+    }
+  }
+
+  const handleImportSubmit = () => executeImport()
+  const handleConfirmImport = () => executeImport({ forceDryRun: false })
+
+  const formatPreviewCurrency = (value, currencyCode = 'BRL') => {
+    try {
+      return Number(value || 0).toLocaleString('pt-BR', {
+        style: 'currency',
+        currency: currencyCode || 'BRL'
+      })
+    } catch {
+      const fallback = formatCurrency(value || 0)
+      return currencyCode && currencyCode !== 'BRL' ? `${fallback} (${currencyCode})` : fallback
+    }
+  }
 
   const handleProfileSave = () => {
     // Implementar salvamento do perfil
@@ -455,18 +580,218 @@ export default function SettingsPage() {
                       Exportar
                     </Button>
                   </div>
-                  
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <Label>Importar dados</Label>
-                      <p className="text-sm text-muted-foreground">
-                        Importe transações de outros sistemas
-                      </p>
+
+                  <div className="space-y-4 rounded-lg border border-dashed p-4">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div>
+                        <Label>Importar dados</Label>
+                        <p className="text-sm text-muted-foreground">
+                          Importe transações de outros sistemas
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Modelo inclui os campos obrigatórios: tipo, data_lancamento, descricao e valor.
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Use valores em portugues: tipo = receita ou despesa - status = pendente, compensada ou conciliada - payment_method = dinheiro, pix, cartao_debito, cartao_credito, boleto, transferencia, cheque ou outros.
+                        </p>
+                      </div>
+                      <Button variant="ghost" asChild>
+                        <a
+                          href="/templates/import-transacoes-template.xlsx"
+                          download
+                          className="inline-flex items-center"
+                        >
+                          <Download className="h-4 w-4 mr-2" />
+                          Baixar modelo
+                        </a>
+                      </Button>
                     </div>
-                    <Button variant="outline">
-                      <Upload className="h-4 w-4 mr-2" />
-                      Importar
-                    </Button>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label>Conta de destino</Label>
+                        <Select
+                          value={importAccount}
+                          onValueChange={setImportAccount}
+                          disabled={accountsQuery.isLoading || !hasAccounts || importLoading}
+                        >
+                          <SelectTrigger>
+                            <SelectValue
+                              placeholder={
+                                accountsQuery.isLoading
+                                  ? 'Carregando contas...'
+                                  : hasAccounts
+                                    ? 'Selecione a conta'
+                                    : 'Nenhuma conta disponível'
+                              }
+                            />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {accounts.map((account) => (
+                              <SelectItem key={account.id} value={account.id}>
+                                {account.nome} ({account.tipo})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {accountsQuery.isError && (
+                          <p className="text-xs text-red-600">
+                            Não foi possível carregar as contas.
+                          </p>
+                        )}
+                        {!accountsQuery.isLoading && !hasAccounts && (
+                          <p className="text-xs text-muted-foreground">
+                            Cadastre uma conta antes de importar transações.
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>Arquivo do modelo (.xlsx)</Label>
+                        <Input
+                          type="file"
+                          accept=".xlsx"
+                          onChange={handleImportFileChange}
+                          disabled={!hasAccounts || importLoading}
+                        />
+                        {importFile && (
+                          <p className="text-xs text-muted-foreground truncate">
+                            Arquivo selecionado: {importFile.name}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div className="flex items-start gap-3">
+                        <Switch
+                          id="import-dry-run"
+                          checked={importDryRun}
+                          onCheckedChange={(checked) => setImportDryRun(checked)}
+                          disabled={importLoading}
+                        />
+                        <div>
+                          <Label htmlFor="import-dry-run" className="text-sm">Modo teste</Label>
+                          <p className="text-xs text-muted-foreground">
+                            Valide o arquivo sem criar transações. Desative para importar de fato.
+                          </p>
+                        </div>
+                      </div>
+                      <Button
+                        onClick={handleImportSubmit}
+                        disabled={!hasAccounts || !importAccount || !importFile || importLoading}
+                      >
+                        {importLoading ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Processando...
+                          </>
+                        ) : (
+                          <>
+                            <Upload className="h-4 w-4 mr-2" />
+                            {importDryRun ? 'Validar arquivo' : 'Importar agora'}
+                          </>
+                        )}
+                      </Button>
+                    </div>
+
+                    {importError && (
+                      <Alert variant="destructive">
+                        <AlertTitle>Erro ao importar</AlertTitle>
+                        <AlertDescription>{importError}</AlertDescription>
+                      </Alert>
+                    )}
+
+                    {importResult && (
+                      <div className="space-y-4">
+                        <Alert>
+                          <AlertTitle>
+                            {lastImportDryRun ? 'Pré-visualização gerada' : 'Importação concluída'}
+                          </AlertTitle>
+                          <AlertDescription>
+                            <div className="grid gap-2 md:grid-cols-2">
+                              <p>
+                                <span className="font-medium">Total de linhas:</span>{' '}
+                                {importResult.total_linhas}
+                              </p>
+                              <p>
+                                <span className="font-medium">Processadas:</span>{' '}
+                                {importResult.linhas_processadas}
+                              </p>
+                              <p>
+                                <span className="font-medium">Com erro:</span>{' '}
+                                {importResult.linhas_com_erro}
+                              </p>
+                              <p>
+                                <span className="font-medium">Transações criadas:</span>{' '}
+                                {importResult.transacoes_criadas}
+                              </p>
+                            </div>
+                            {!lastImportDryRun && (
+                              <p className="mt-2 text-xs text-muted-foreground">
+                                As transações válidas foram adicionadas à conta selecionada.
+                              </p>
+                            )}
+                          </AlertDescription>
+                        </Alert>
+
+                        {importResult.preview?.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium">
+                              Prévia das primeiras {importResult.preview.length} linhas
+                            </p>
+                            <div className="overflow-x-auto rounded-md border">
+                              <table className="w-full text-sm">
+                                <thead className="bg-muted/40">
+                                  <tr>
+                                    <th className="px-3 py-2 text-left text-xs font-medium uppercase text-muted-foreground">Linha</th>
+                                    <th className="px-3 py-2 text-left text-xs font-medium uppercase text-muted-foreground">Data</th>
+                                    <th className="px-3 py-2 text-left text-xs font-medium uppercase text-muted-foreground">Descrição</th>
+                                    <th className="px-3 py-2 text-left text-xs font-medium uppercase text-muted-foreground">Tipo</th>
+                                    <th className="px-3 py-2 text-left text-xs font-medium uppercase text-muted-foreground">Valor</th>
+                                    <th className="px-3 py-2 text-left text-xs font-medium uppercase text-muted-foreground">Categoria</th>
+                                    <th className="px-3 py-2 text-left text-xs font-medium uppercase text-muted-foreground">Status</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {importResult.preview.map((item) => (
+                                    <tr key={item.linha} className="border-t">
+                                      <td className="px-3 py-2 text-xs text-muted-foreground">{item.linha}</td>
+                                      <td className="px-3 py-2">{item.data_lancamento}</td>
+                                      <td className="px-3 py-2">{item.descricao}</td>
+                                      <td className="px-3 py-2 capitalize">{item.tipo}</td>
+                                      <td className="px-3 py-2">
+                                        {formatPreviewCurrency(item.valor, item.moeda)}
+                                      </td>
+                                      <td className="px-3 py-2">{item.categoria || '—'}</td>
+                                      <td className="px-3 py-2 capitalize">{item.status}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+
+                        {importResult.erros?.length > 0 && (
+                          <Alert variant="destructive">
+                            <AlertTitle>Linhas com erro ({importResult.erros.length})</AlertTitle>
+                            <AlertDescription>
+                              <ul className="list-disc space-y-1 pl-5">
+                                {importResult.erros.slice(0, 5).map((msg, idx) => (
+                                  <li key={`${msg}-${idx}`}>{msg}</li>
+                                ))}
+                              </ul>
+                              {importResult.erros.length > 5 && (
+                                <p className="mt-2 text-xs text-muted-foreground">
+                                  Mostrando 5 de {importResult.erros.length} erros.
+                                </p>
+                              )}
+                            </AlertDescription>
+                          </Alert>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

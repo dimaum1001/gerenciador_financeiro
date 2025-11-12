@@ -10,55 +10,113 @@ import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
+import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import LoadingSpinner from '@/components/ui/loading-spinner'
 import { formatCurrency } from '@/lib/formatters'
-import { Plus, Edit2, Trash2, RefreshCcw } from 'lucide-react'
-
-const transactionTypeOptions = [
-  { value: 'income', label: 'Receita' },
-  { value: 'expense', label: 'Despesa' },
-  { value: 'transfer', label: 'Transferencia' },
-]
+import {
+  transactionTypeOptions,
+  transactionStatusOptions,
+  paymentMethodOptions,
+  normalizeTransactionType,
+  normalizeTransactionStatus,
+  normalizePaymentMethod,
+  getField,
+} from '@/lib/api-locale'
+import { cn } from '@/lib/utils'
+import { Plus, Edit2, Trash2, RefreshCcw, ChevronsUpDown, Check } from 'lucide-react'
 
 const typeFilterOptions = [
   { value: 'all', label: 'Todos os tipos' },
-  { value: 'income', label: 'Receitas' },
-  { value: 'expense', label: 'Despesas' },
-]
-
-const statusOptions = [
-  { value: 'pending', label: 'Pendente' },
-  { value: 'cleared', label: 'Confirmada' },
-  { value: 'reconciled', label: 'Conciliada' },
-]
-
-const paymentMethods = [
-  { value: 'cash', label: 'Dinheiro' },
-  { value: 'pix', label: 'PIX' },
-  { value: 'debit', label: 'Cartao de Debito' },
-  { value: 'credit', label: 'Cartao de Credito' },
-  { value: 'boleto', label: 'Boleto' },
-  { value: 'transfer', label: 'Transferencia' },
-  { value: 'check', label: 'Cheque' },
-  { value: 'other', label: 'Outro' },
+  { value: 'receita', label: 'Receitas' },
+  { value: 'despesa', label: 'Despesas' },
 ]
 
 const transactionTypeLabels = Object.fromEntries(transactionTypeOptions.map((option) => [option.value, option.label]))
-const statusLabelMap = Object.fromEntries(statusOptions.map((option) => [option.value, option.label]))
+const statusLabelMap = Object.fromEntries(transactionStatusOptions.map((option) => [option.value, option.label]))
+
+function AutocompleteSelect({
+  options = [],
+  value,
+  onChange,
+  placeholder = 'Selecione...',
+  searchPlaceholder = 'Digite para buscar...',
+  emptyMessage = 'Nenhum resultado encontrado.',
+  disabled = false,
+  className,
+}) {
+  const [open, setOpen] = useState(false)
+  const selectedOption = options.find((option) => option.value === value)
+
+  const handleSelect = (selectedValue) => {
+    onChange?.(selectedValue)
+    setOpen(false)
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className={cn('w-full justify-between', className)}
+          disabled={disabled}
+        >
+          {selectedOption ? selectedOption.label : placeholder}
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="w-[var(--radix-popover-trigger-width)] min-w-[220px] p-0"
+      >
+        <Command loop>
+          <CommandInput placeholder={searchPlaceholder} autoFocus />
+          <CommandEmpty>{emptyMessage}</CommandEmpty>
+          <CommandList>
+            <CommandGroup>
+              {options.map((option, index) => (
+                <CommandItem
+                  key={`${option.value ?? 'empty'}-${index}`}
+                  value={`${option.value ?? ''} ${option.label}`}
+                  onSelect={() => handleSelect(option.value)}
+                >
+                  <Check
+                    className={cn(
+                      'mr-2 h-4 w-4',
+                      option.value === value ? 'opacity-100' : 'opacity-0'
+                    )}
+                  />
+                  <div>
+                    <p>{option.label}</p>
+                    {option.description && (
+                      <p className="text-xs text-muted-foreground">{option.description}</p>
+                    )}
+                  </div>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
 
 function TransactionForm({ initialData, accounts, categories, onSubmit, onCancel, loading }) {
   const [form, setForm] = useState(() => ({
     descricao: initialData?.descricao ?? '',
     valor: initialData?.valor != null ? Number(initialData.valor).toString() : '',
     moeda: initialData?.moeda ?? 'BRL',
-    tipo: initialData?.tipo ?? 'expense',
+    tipo: normalizeTransactionType(initialData?.tipo_portugues ?? initialData?.tipo ?? 'despesa'),
     data_lancamento: initialData?.data_lancamento ?? new Date().toISOString().split('T')[0],
-    account_id: initialData?.account_id ?? (accounts[0]?.id ?? ''),
-    category_id: initialData?.category_id ?? '',
-    status: initialData?.status ?? 'pending',
-    payment_method: initialData?.payment_method ?? '',
+    conta_id: getField(initialData, 'conta_id', 'account_id') ?? (accounts[0]?.id ?? ''),
+    categoria_id: getField(initialData, 'categoria_id', 'category_id') ?? '',
+    status: normalizeTransactionStatus(initialData?.status) ?? 'pendente',
+    metodo_pagamento: normalizePaymentMethod(getField(initialData, 'metodo_pagamento', 'payment_method')) ?? '',
     tags: initialData?.tags?.join(', ') ?? '',
   }))
 
@@ -73,8 +131,9 @@ function TransactionForm({ initialData, accounts, categories, onSubmit, onCancel
       ...form,
       valor: Number(form.valor ?? 0),
       tags: form.tags ? form.tags.split(',').map((tag) => tag.trim()).filter(Boolean) : [],
-      category_id: form.category_id || null,
-      payment_method: form.payment_method || null,
+      categoria_id: form.categoria_id || null,
+      metodo_pagamento: form.metodo_pagamento || null,
+      status: normalizeTransactionStatus(form.status ?? 'pendente'),
     }
     onSubmit(payload)
   }
@@ -89,72 +148,52 @@ function TransactionForm({ initialData, accounts, categories, onSubmit, onCancel
       <div className="grid md:grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label>Conta</Label>
-          <Select value={form.account_id} onValueChange={(value) => setForm((prev) => ({ ...prev, account_id: value }))}>
-            <SelectTrigger>
-              <SelectValue placeholder="Selecione a conta" />
-            </SelectTrigger>
-            <SelectContent>
-              {accounts.map((account) => (
-                <SelectItem key={account.id} value={account.id}>
-                  {account.nome}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <AutocompleteSelect
+            options={accounts.map((account) => ({ value: account.id, label: account.nome }))}
+            value={form.conta_id}
+            onChange={(value) => setForm((prev) => ({ ...prev, conta_id: value }))}
+            placeholder="Selecione a conta"
+            searchPlaceholder="Busque pela conta..."
+            disabled={!accounts.length}
+          />
         </div>
 
         <div className="space-y-2">
           <Label>Categoria</Label>
-          <Select
-            value={form.category_id || 'none'}
-            onValueChange={(value) => setForm((prev) => ({ ...prev, category_id: value === 'none' ? '' : value }))}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Opcional" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">Sem categoria</SelectItem>
-              {categories.map((category) => (
-                <SelectItem key={category.id} value={category.id}>
-                  {category.nome}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <AutocompleteSelect
+            options={[
+              { value: '', label: 'Sem categoria' },
+              ...categories.map((category) => ({ value: category.id, label: category.nome })),
+            ]}
+            value={form.categoria_id || ''}
+            onChange={(value) => setForm((prev) => ({ ...prev, categoria_id: value || '' }))}
+            placeholder="Opcional"
+            searchPlaceholder="Busque pela categoria..."
+          />
         </div>
       </div>
 
       <div className="grid md:grid-cols-3 gap-4">
         <div className="space-y-2">
           <Label>Tipo</Label>
-          <Select value={form.tipo} onValueChange={(value) => setForm((prev) => ({ ...prev, tipo: value }))}>
-            <SelectTrigger>
-              <SelectValue placeholder="Tipo" />
-            </SelectTrigger>
-            <SelectContent>
-              {transactionTypeOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <AutocompleteSelect
+            options={transactionTypeOptions}
+            value={form.tipo}
+            onChange={(value) => setForm((prev) => ({ ...prev, tipo: value }))}
+            placeholder="Tipo"
+            searchPlaceholder="Busque pelo tipo..."
+          />
         </div>
 
         <div className="space-y-2">
           <Label>Status</Label>
-          <Select value={form.status} onValueChange={(value) => setForm((prev) => ({ ...prev, status: value }))}>
-            <SelectTrigger>
-              <SelectValue placeholder="Status" />
-            </SelectTrigger>
-            <SelectContent>
-              {statusOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <AutocompleteSelect
+            options={transactionStatusOptions}
+            value={form.status}
+            onChange={(value) => setForm((prev) => ({ ...prev, status: value }))}
+            placeholder="Status"
+            searchPlaceholder="Busque pelo status..."
+          />
         </div>
 
         <div className="space-y-2">
@@ -170,19 +209,16 @@ function TransactionForm({ initialData, accounts, categories, onSubmit, onCancel
         </div>
         <div className="space-y-2">
           <Label>Metodo de pagamento</Label>
-          <Select value={form.payment_method || 'none'} onValueChange={(value) => setForm((prev) => ({ ...prev, payment_method: value === 'none' ? '' : value }))}>
-            <SelectTrigger>
-              <SelectValue placeholder="Opcional" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">Nao informar</SelectItem>
-              {paymentMethods.map((method) => (
-                <SelectItem key={method.value} value={method.value}>
-                  {method.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        <AutocompleteSelect
+          options={[
+            { value: '', label: 'Nao informar' },
+            ...paymentMethodOptions,
+          ]}
+          value={form.metodo_pagamento || ''}
+          onChange={(value) => setForm((prev) => ({ ...prev, metodo_pagamento: value }))}
+          placeholder="Opcional"
+          searchPlaceholder="Busque pelo metodo..."
+        />
         </div>
         <div className="space-y-2">
           <Label htmlFor="tags">Tags (separadas por virgula)</Label>
@@ -353,6 +389,12 @@ export default function TransactionsPage() {
   const accounts = accountsQuery.data ?? []
   const categories = categoriesQuery.data ?? []
 
+  const getTransactionContaId = (tx) => getField(tx, 'conta_id', 'account_id')
+  const getTransactionCategoriaId = (tx) => getField(tx, 'categoria_id', 'category_id')
+  const getTransactionTipo = (tx) => normalizeTransactionType(tx?.tipo_portugues ?? tx?.tipo)
+  const getTransactionStatus = (tx) => normalizeTransactionStatus(tx?.status_portugues ?? tx?.status)
+  const getTransactionMetodo = (tx) => normalizePaymentMethod(tx?.metodo_pagamento ?? tx?.payment_method)
+
   const accountsMap = useMemo(() => Object.fromEntries(accounts.map((account) => [account.id, account.nome])), [accounts])
   const categoriesMap = useMemo(() => Object.fromEntries(categories.map((category) => [category.id, category.nome])), [categories])
 
@@ -364,7 +406,7 @@ export default function TransactionsPage() {
     if (typeFilter === 'all') {
       return transactions
     }
-    return transactions.filter((tx) => tx.tipo === typeFilter)
+    return transactions.filter((tx) => getTransactionTipo(tx) === typeFilter)
   }, [transactions, typeFilter])
 
   const filterLabel = useMemo(() => {
@@ -379,10 +421,10 @@ export default function TransactionsPage() {
 
   const resumo = useMemo(() => {
     const receitas = filteredTransactions
-      .filter((tx) => tx.tipo === 'income')
+      .filter((tx) => getTransactionTipo(tx) === 'receita')
       .reduce((sum, tx) => sum + Number(tx.valor || 0), 0)
     const despesas = filteredTransactions
-      .filter((tx) => tx.tipo === 'expense')
+      .filter((tx) => getTransactionTipo(tx) === 'despesa')
       .reduce((sum, tx) => sum + Number(tx.valor || 0), 0)
     return {
       receitas,
@@ -392,9 +434,12 @@ export default function TransactionsPage() {
   }, [filteredTransactions])
 
   const statusResumo = useMemo(() => {
-    const base = Object.fromEntries(statusOptions.map((option) => [option.value, 0]))
+    const base = Object.fromEntries(transactionStatusOptions.map((option) => [option.value, 0]))
     filteredTransactions.forEach((tx) => {
-      base[tx.status] = (base[tx.status] ?? 0) + 1
+      const status = getTransactionStatus(tx)
+      if (status) {
+        base[status] = (base[status] ?? 0) + 1
+      }
     })
     return base
   }, [filteredTransactions])
@@ -412,10 +457,11 @@ export default function TransactionsPage() {
 
       entry.total += 1
       const value = Number(tx.valor || 0)
-      if (tx.tipo === 'income') {
+      const tipo = getTransactionTipo(tx)
+      if (tipo === 'receita') {
         entry.income += value
       }
-      if (tx.tipo === 'expense') {
+      if (tipo === 'despesa') {
         entry.expense += value
       }
 
@@ -443,10 +489,12 @@ export default function TransactionsPage() {
           <p className="text-sm text-muted-foreground">{typeFilter === 'all' ? 'Exibindo receitas e despesas.' : `Exibindo apenas ${filterLabel}.`}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 md:justify-end">
-          <Select
+          <AutocompleteSelect
+            className="w-[160px]"
+            options={yearOptions.map((year) => ({ value: year, label: year }))}
             value={selectedYear}
-            onValueChange={(year) => {
-              if (year === selectedYear) return
+            onChange={(year) => {
+              if (!year || year === selectedYear) return
               const [, currentMonth] = selectedPeriod.split('-')
               const sameMonth = availableMonths.find((option) => option.value === `${year}-${currentMonth}`)
               const fallback = availableMonths.find((option) => option.year === year)
@@ -456,42 +504,26 @@ export default function TransactionsPage() {
                 setSelectedPeriod(fallback.value)
               }
             }}
-          >
-            <SelectTrigger className="w-[160px]">
-              <SelectValue placeholder="Selecione o ano" />
-            </SelectTrigger>
-            <SelectContent>
-              {yearOptions.map((year) => (
-                <SelectItem key={year} value={year}>
-                  {year}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
-            <SelectTrigger className="w-[220px]">
-              <SelectValue placeholder="Selecione o mes" />
-            </SelectTrigger>
-            <SelectContent>
-              {monthOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={typeFilter} onValueChange={setTypeFilter}>
-            <SelectTrigger className="w-[220px]">
-              <SelectValue placeholder="Filtrar por tipo" />
-            </SelectTrigger>
-            <SelectContent>
-              {typeFilterOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            placeholder="Selecione o ano"
+            searchPlaceholder="Buscar ano..."
+          />
+          <AutocompleteSelect
+            className="w-[220px]"
+            options={monthOptions}
+            value={selectedPeriod}
+            onChange={setSelectedPeriod}
+            placeholder="Selecione o mes"
+            searchPlaceholder="Buscar mes..."
+            emptyMessage="Nenhum mes disponivel."
+          />
+          <AutocompleteSelect
+            className="w-[220px]"
+            options={typeFilterOptions}
+            value={typeFilter}
+            onChange={setTypeFilter}
+            placeholder="Filtrar por tipo"
+            searchPlaceholder="Digite para filtrar..."
+          />
           <Button variant="outline" onClick={() => queryClient.invalidateQueries({ queryKey: ['transactions'] })}>
             <RefreshCcw className="h-4 w-4 mr-2" /> Atualizar
           </Button>
@@ -543,7 +575,7 @@ export default function TransactionsPage() {
           <CardDescription>{`Quantidade de registros em ${selectedMonthLabel}`}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-6">
-          {statusOptions.map((option) => (
+          {transactionStatusOptions.map((option) => (
             <div key={option.value} className="space-y-1">
               <p className="text-sm text-muted-foreground">{option.label}</p>
               <p className="text-lg font-semibold">{statusResumo[option.value] ?? 0}</p>
@@ -614,17 +646,20 @@ export default function TransactionsPage() {
                 <tbody>
                   {sortedTransactions.map((transaction) => {
                     const valorNumerico = Number(transaction.valor || 0)
-                    const isExpense = transaction.tipo === 'expense'
-                    const valorFormatado = isExpense ? formatCurrency(valorNumerico * -1) : formatCurrency(valorNumerico)
+                    const tipoNormalizado = getTransactionTipo(transaction)
+                    const statusNormalizado = getTransactionStatus(transaction)
+                    const valorFormatado = tipoNormalizado === 'despesa' ? formatCurrency(valorNumerico * -1) : formatCurrency(valorNumerico)
+                    const contaId = getTransactionContaId(transaction)
+                    const categoriaId = getTransactionCategoriaId(transaction)
                     return (
                       <tr key={transaction.id} className="border-b last:border-transparent">
                         <td className="py-2">{format(new Date(transaction.data_lancamento), 'dd/MM/yyyy')}</td>
                         <td className="py-2">{transaction.descricao}</td>
-                        <td className="py-2">{accountsMap[transaction.account_id] ?? '--'}</td>
-                        <td className="py-2">{transaction.category_id ? categoriesMap[transaction.category_id] ?? '--' : '--'}</td>
-                        <td className="py-2">{transactionTypeLabels[transaction.tipo] ?? transaction.tipo}</td>
+                        <td className="py-2">{accountsMap[contaId] ?? '--'}</td>
+                        <td className="py-2">{categoriaId ? categoriesMap[categoriaId] ?? '--' : '--'}</td>
+                        <td className="py-2">{transactionTypeLabels[tipoNormalizado] ?? tipoNormalizado}</td>
                         <td className="py-2">{valorFormatado}</td>
-                        <td className="py-2">{statusLabelMap[transaction.status] ?? transaction.status}</td>
+                        <td className="py-2">{statusLabelMap[statusNormalizado] ?? statusNormalizado}</td>
                         <td className="py-2 text-right space-x-2">
                           <Button variant="ghost" size="sm" onClick={() => handleEdit(transaction)}>
                             <Edit2 className="h-4 w-4" />

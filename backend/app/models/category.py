@@ -12,6 +12,7 @@ from sqlalchemy.orm import relationship
 
 from app.db.database import Base
 from app.db.types import GUID
+from app.models._enum_utils import enum_values
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -21,34 +22,44 @@ if TYPE_CHECKING:
 
 class CategoryType(str, Enum):
     """Tipos de categoria"""
-    INCOME = "income"     # Receita
-    EXPENSE = "expense"   # Despesa
+    INCOME = "receita"
+    EXPENSE = "despesa"
 
 
 class Category(Base):
     """Modelo de categoria"""
     
-    __tablename__ = "categories"
+    __tablename__ = "categorias"
     __allow_unmapped__ = True
     
     # Campos principais
     id = Column(GUID, primary_key=True, default=uuid.uuid4, index=True)
     
     user_id = Column(
+        "usuario_id",
         GUID,
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("usuarios.id", ondelete="CASCADE"),
         nullable=False,
         index=True
     )
-    is_demo_data = Column(Boolean, default=False, nullable=False, index=True)
+    is_demo_data = Column("dados_demo", Boolean, default=False, nullable=False, index=True)
     
     nome = Column(String(100), nullable=False, index=True)
-    tipo = Column(SQLEnum(CategoryType), nullable=False, index=True)
+    tipo = Column(
+        SQLEnum(
+            CategoryType,
+            name="categorytype",
+            values_callable=enum_values,
+        ),
+        nullable=False,
+        index=True,
+    )
     
     # Hierarquia
     parent_id = Column(
+        "categoria_pai_id",
         GUID,
-        ForeignKey("categories.id", ondelete="CASCADE"),
+        ForeignKey("categorias.id", ondelete="CASCADE"),
         nullable=True,
         index=True
     )

@@ -7,9 +7,10 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, validator, computed_field, AliasChoices
 
 from app.models.account import AccountType
+from app.utils.locale_mapper import account_type_mapper
 
 
 class AccountBase(BaseModel):
@@ -23,6 +24,10 @@ class AccountBase(BaseModel):
     descricao: Optional[str] = Field(None, description="Descrição da conta")
     cor: Optional[str] = Field(None, max_length=7, description="Cor em hexadecimal")
     icone: Optional[str] = Field(None, max_length=50, description="Ícone da conta")
+
+    @validator("tipo", pre=True)
+    def _normalize_tipo(cls, value):
+        return account_type_mapper.to_enum(value)
 
 
 class AccountCreate(AccountBase):
@@ -85,7 +90,11 @@ class AccountUpdate(BaseModel):
 class AccountResponse(AccountBase):
     """Schema de resposta para conta"""
     id: uuid.UUID
-    user_id: uuid.UUID
+    user_id: uuid.UUID = Field(
+        ...,
+        validation_alias=AliasChoices("usuario_id", "user_id"),
+        serialization_alias="usuario_id",
+    )
     saldo_atual: Decimal
     tipo_display: str
     is_credit_card: bool
@@ -99,7 +108,15 @@ class AccountResponse(AccountBase):
     criado_em: datetime
     atualizado_em: datetime
     
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    @computed_field
+    def tipo_portugues(self) -> Optional[str]:
+        return account_type_mapper.to_portuguese(self.tipo)
+
+    @computed_field
+    def tipo_legado(self) -> Optional[str]:
+        return account_type_mapper.legacy_value(self.tipo)
 
 
 class AccountSummary(BaseModel):
@@ -113,7 +130,15 @@ class AccountSummary(BaseModel):
     icone: Optional[str] = None
     ativo: bool
     
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    @computed_field
+    def tipo_portugues(self) -> Optional[str]:
+        return account_type_mapper.to_portuguese(self.tipo)
+
+    @computed_field
+    def tipo_legado(self) -> Optional[str]:
+        return account_type_mapper.legacy_value(self.tipo)
 
 
 class AccountBalance(BaseModel):

@@ -299,8 +299,8 @@ def _ensure_is_demo_column(session: Session) -> None:
         try:
             session.execute(
                 text(
-                    "ALTER TABLE IF EXISTS users "
-                    "ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT FALSE"
+                    "ALTER TABLE IF EXISTS usuarios "
+                    "ADD COLUMN IF NOT EXISTS demo BOOLEAN NOT NULL DEFAULT FALSE"
                 )
             )
             session.commit()
@@ -310,13 +310,13 @@ def _ensure_is_demo_column(session: Session) -> None:
         return
 
     inspector = inspect(bind)
-    columns = {column["name"] for column in inspector.get_columns("users")}
-    if "is_demo" in columns:
+    columns = {column["name"] for column in inspector.get_columns("usuarios")}
+    if "demo" in columns:
         return
 
     try:
         session.execute(
-            text("ALTER TABLE users ADD COLUMN is_demo BOOLEAN NOT NULL DEFAULT FALSE")
+            text("ALTER TABLE usuarios ADD COLUMN demo BOOLEAN NOT NULL DEFAULT FALSE")
         )
         session.commit()
     except OperationalError:
@@ -329,7 +329,7 @@ def _ensure_demo_data_columns(session: Session) -> None:
     bind = session.bind
     dialect_name = bind.dialect.name if bind is not None else ""
 
-    tables = ["accounts", "categories", "transactions", "budgets", "recurring_rules"]
+    tables = ["contas", "categorias", "transacoes", "orcamentos", "regras_recorrentes"]
     if dialect_name != "sqlite":
         try:
             for table in tables:
@@ -337,7 +337,7 @@ def _ensure_demo_data_columns(session: Session) -> None:
                     text(
                         "ALTER TABLE IF EXISTS "
                         f"{table} ADD COLUMN IF NOT EXISTS "
-                        "is_demo_data BOOLEAN NOT NULL DEFAULT FALSE"
+                        "dados_demo BOOLEAN NOT NULL DEFAULT FALSE"
                     )
                 )
             session.commit()
@@ -349,12 +349,12 @@ def _ensure_demo_data_columns(session: Session) -> None:
     inspector = inspect(bind)
     for table in tables:
         columns = {column["name"] for column in inspector.get_columns(table)}
-        if "is_demo_data" in columns:
+        if "dados_demo" in columns:
             continue
         try:
             session.execute(
                 text(
-                    f"ALTER TABLE {table} ADD COLUMN is_demo_data BOOLEAN NOT NULL DEFAULT FALSE"
+                    f"ALTER TABLE {table} ADD COLUMN dados_demo BOOLEAN NOT NULL DEFAULT FALSE"
                 )
             )
             session.commit()
@@ -368,9 +368,9 @@ def _mark_demo_rows(session: Session, demo_user_id) -> None:
     if not demo_user_id:
         return
 
-    for table in ["accounts", "categories", "transactions", "budgets", "recurring_rules"]:
+    for table in ["contas", "categorias", "transacoes", "orcamentos", "regras_recorrentes"]:
         session.execute(
-            text(f"UPDATE {table} SET is_demo_data = TRUE WHERE user_id = :user_id"),
-            {"user_id": str(demo_user_id)},
+            text(f"UPDATE {table} SET dados_demo = TRUE WHERE usuario_id = :usuario_id"),
+            {"usuario_id": str(demo_user_id)},
         )
     session.commit()

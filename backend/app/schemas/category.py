@@ -6,22 +6,34 @@ import uuid
 from datetime import datetime
 from typing import Optional, List
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, validator, computed_field, AliasChoices
 
 from app.models.category import CategoryType
+from app.utils.locale_mapper import category_type_mapper
 
 
 class CategoryBase(BaseModel):
     """Schema base para categoria"""
     nome: str = Field(..., min_length=1, max_length=100, description="Nome da categoria")
     tipo: CategoryType = Field(..., description="Tipo da categoria (income/expense)")
-    parent_id: Optional[uuid.UUID] = Field(None, description="ID da categoria pai")
+    parent_id: Optional[uuid.UUID] = Field(
+        None,
+        description="ID da categoria pai",
+        validation_alias=AliasChoices("categoria_pai_id", "parent_id"),
+        serialization_alias="categoria_pai_id",
+    )
     cor: Optional[str] = Field(None, max_length=7, description="Cor em hexadecimal")
     icone: Optional[str] = Field(None, max_length=50, description="Ícone da categoria")
     descricao: Optional[str] = Field(None, description="Descrição da categoria")
     ativo: bool = Field(default=True, description="Se a categoria está ativa")
     incluir_relatorios: bool = Field(default=True, description="Incluir nos relatórios")
     meta_mensal: Optional[str] = Field(None, max_length=15, description="Meta mensal")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @validator("tipo", pre=True)
+    def _normalize_tipo(cls, value):
+        return category_type_mapper.to_enum(value)
 
 
 class CategoryCreate(CategoryBase):
@@ -69,7 +81,11 @@ class CategoryUpdate(BaseModel):
 class CategoryResponse(CategoryBase):
     """Schema de resposta para categoria"""
     id: uuid.UUID
-    user_id: uuid.UUID
+    user_id: uuid.UUID = Field(
+        ...,
+        validation_alias=AliasChoices("usuario_id", "user_id"),
+        serialization_alias="usuario_id",
+    )
     nome_completo: str
     nivel: int
     is_parent: bool
@@ -77,14 +93,22 @@ class CategoryResponse(CategoryBase):
     criado_em: datetime
     atualizado_em: datetime
     
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    @computed_field
+    def tipo_portugues(self) -> Optional[str]:
+        return category_type_mapper.to_portuguese(self.tipo)
+
+    @computed_field
+    def tipo_legado(self) -> Optional[str]:
+        return category_type_mapper.legacy_value(self.tipo)
 
 
 class CategoryTree(CategoryResponse):
     """Schema para árvore de categorias"""
     children: List["CategoryTree"] = Field(default_factory=list)
     
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class CategorySummary(BaseModel):
@@ -101,6 +125,14 @@ class CategorySummary(BaseModel):
     valor_total: float = 0.0
     
     model_config = ConfigDict(from_attributes=True)
+
+    @computed_field
+    def tipo_portugues(self) -> Optional[str]:
+        return category_type_mapper.to_portuguese(self.tipo)
+
+    @computed_field
+    def tipo_legado(self) -> Optional[str]:
+        return category_type_mapper.legacy_value(self.tipo)
 
 
 class CategoryStats(BaseModel):
@@ -128,7 +160,11 @@ class CategoryStats(BaseModel):
 
 class CategoryBudgetSummary(BaseModel):
     """Schema para resumo de categoria com orçamento"""
-    category_id: uuid.UUID
+    category_id: uuid.UUID = Field(
+        ...,
+        validation_alias=AliasChoices("categoria_id", "category_id"),
+        serialization_alias="categoria_id",
+    )
     nome: str
     nome_completo: str
     tipo: CategoryType
@@ -138,6 +174,14 @@ class CategoryBudgetSummary(BaseModel):
     percentual_utilizado: float = 0.0
     valor_restante: float = 0.0
     status: str = "active"
+
+    @computed_field
+    def tipo_portugues(self) -> Optional[str]:
+        return category_type_mapper.to_portuguese(self.tipo)
+
+    @computed_field
+    def tipo_legado(self) -> Optional[str]:
+        return category_type_mapper.legacy_value(self.tipo)
     
     model_config = ConfigDict(
         json_schema_extra={
@@ -168,4 +212,4 @@ class CategoryListResponse(BaseModel):
     skip: int
     limit: int
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)

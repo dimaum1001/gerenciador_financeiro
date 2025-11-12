@@ -15,7 +15,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { startOfMonth, format } from 'date-fns'
+import { eachMonthOfInterval, startOfMonth, subMonths, format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -147,8 +147,8 @@ export default function ReportsPage() {
   const [categoryMonths, setCategoryMonths] = useState(3)
   const today = new Date()
   const [categoryYear, setCategoryYear] = useState(today.getFullYear())
-  const [budgetYear, setBudgetYear] = useState(today.getFullYear())
-  const [budgetMonth, setBudgetMonth] = useState(today.getMonth() + 1)
+  const [budgetMonth, setBudgetMonth] = useState(() => format(startOfMonth(today), 'yyyy-MM'))
+  const [budgetYear, budgetMonthNumber] = budgetMonth.split('-').map((value) => Number(value))
 
   const { data: cashFlow, isLoading: cashFlowLoading, isError: cashFlowError } = useCashFlow(12)
   const categoryFilters = useMemo(() => {
@@ -159,7 +159,7 @@ export default function ReportsPage() {
   const { data: expenseCategories, isLoading: expenseLoading, isError: expenseError } = useCategoriesSummary('despesa', categoryFilters)
   const { data: incomeCategories, isLoading: incomeLoading, isError: incomeError } = useCategoriesSummary('receita', categoryFilters)
   const { data: accountsBalance, isLoading: accountsLoading, isError: accountsError } = useAccountsBalance()
-  const { data: budgetStatus, isLoading: budgetLoading, isError: budgetError } = useBudgetStatus(budgetYear, budgetMonth)
+  const { data: budgetStatus, isLoading: budgetLoading, isError: budgetError } = useBudgetStatus(budgetYear, budgetMonthNumber)
 
   const cashFlowData = useMemo(() => {
     if (!cashFlow) return []
@@ -199,29 +199,23 @@ export default function ReportsPage() {
     }))
   }, [budgetStatus])
 
-  const budgetYearOptions = useMemo(() => {
-    const currentYear = today.getFullYear()
-    const yearsBefore = 2
-    const yearsAfter = 3
-    const startYear = currentYear - yearsBefore
-    return Array.from({ length: yearsBefore + yearsAfter + 1 }, (_, index) => startYear + index)
-  }, [today])
-
   const budgetMonthOptions = useMemo(() => {
-    return Array.from({ length: 12 }, (_, index) => {
-      const monthDate = startOfMonth(new Date(2020, index, 1))
-      const label = format(monthDate, 'MMMM', { locale: ptBR })
+    const end = startOfMonth(today)
+    const start = subMonths(end, 11)
+    return eachMonthOfInterval({ start, end }).reverse().map((date) => {
+      const value = format(date, 'yyyy-MM')
+      const label = format(date, "MMMM 'de' yyyy", { locale: ptBR })
       return {
-        value: index + 1,
+        value,
         label: label.charAt(0).toUpperCase() + label.slice(1),
       }
     })
-  }, [])
+  }, [today])
 
   const selectedBudgetLabel = useMemo(() => {
-    const monthLabel = budgetMonthOptions.find((opt) => opt.value === budgetMonth)?.label ?? ''
-    return monthLabel ? `${monthLabel} de ${budgetYear}` : `${budgetYear}`
-  }, [budgetMonthOptions, budgetMonth, budgetYear])
+    const option = budgetMonthOptions.find((opt) => opt.value === budgetMonth)
+    return option?.label ?? ''
+  }, [budgetMonthOptions, budgetMonth])
 
   const selectedCategories = categoryTab === 'despesa' ? expenseData : incomeData
 
@@ -391,32 +385,18 @@ export default function ReportsPage() {
             <CardTitle>Orcamentos</CardTitle>
             <CardDescription>{`Planejado vs realizado em ${selectedBudgetLabel}`}</CardDescription>
           </div>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <Select value={String(budgetYear)} onValueChange={(value) => setBudgetYear(Number(value))}>
-              <SelectTrigger className="w-[140px]">
-                <SelectValue placeholder="Ano" />
-              </SelectTrigger>
-              <SelectContent>
-                {budgetYearOptions.map((yearOption) => (
-                  <SelectItem key={yearOption} value={String(yearOption)}>
-                    {yearOption}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={String(budgetMonth)} onValueChange={(value) => setBudgetMonth(Number(value))}>
-              <SelectTrigger className="w-[160px]">
-                <SelectValue placeholder="Mes" />
-              </SelectTrigger>
-              <SelectContent>
-                {budgetMonthOptions.map((option) => (
-                  <SelectItem key={option.value} value={String(option.value)}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <Select value={budgetMonth} onValueChange={setBudgetMonth}>
+            <SelectTrigger className="w-[180px]">
+              <SelectValue placeholder="Selecione o mes" />
+            </SelectTrigger>
+            <SelectContent>
+              {budgetMonthOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </CardHeader>
         <CardContent>
           <SectionState

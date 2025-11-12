@@ -13,6 +13,7 @@ from app.schemas.account import (
     AccountResponse,
     AccountUpdate,
 )
+from app.utils.locale_mapper import account_type_mapper
 
 router = APIRouter()
 
@@ -40,7 +41,7 @@ async def list_accounts(
     # Aplicar filtros
     if tipo:
         try:
-            tipo_enum = AccountType(tipo)
+            tipo_enum = account_type_mapper.to_enum(tipo)
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

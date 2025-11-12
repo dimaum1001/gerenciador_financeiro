@@ -223,18 +223,58 @@ export const useCashFlow = (months = 6, options = {}) => {
   })
 }
 
-export const useCategoriesSummary = (tipo, months = 1, options = {}) => {
+export const useCategoriesSummary = (tipo, paramsOrMonths = {}, options = {}) => {
   const { api } = useApi()
+  const now = new Date()
+
+  let params = paramsOrMonths
+  let queryOptions = options
+
+  if (typeof paramsOrMonths === 'number') {
+    params = { months: paramsOrMonths }
+    queryOptions = options || {}
+  } else if (paramsOrMonths && typeof paramsOrMonths === 'object' && !Array.isArray(paramsOrMonths)) {
+    params = paramsOrMonths
+  } else if (!paramsOrMonths) {
+    params = {}
+  }
+
+  const { months, year, month } = params
+  const useMonths = typeof months === 'number' && months > 0
+  const effectiveYear = typeof year === 'number' ? year : now.getFullYear()
+  const effectiveMonth = typeof month === 'number' ? month : undefined
+
+  const buildSearchParams = () => {
+    const searchParams = new URLSearchParams({ tipo })
+    if (useMonths) {
+      searchParams.set('months', String(months))
+    } else {
+      searchParams.set('year', String(effectiveYear))
+      if (effectiveMonth) {
+        searchParams.set('month', String(effectiveMonth))
+      }
+    }
+    return searchParams.toString()
+  }
+
+  const queryKey = [
+    'dashboard',
+    'categories-summary',
+    tipo,
+    useMonths ? months : null,
+    useMonths ? null : effectiveYear,
+    useMonths ? null : effectiveMonth ?? null
+  ]
   
   return useQuery({
-    queryKey: ['dashboard', 'categories-summary', tipo, months],
+    queryKey,
     queryFn: async () => {
-      const response = await api.get(`/dashboard/categories-summary?tipo=${tipo}&months=${months}`)
+      const response = await api.get(`/dashboard/categories-summary?${buildSearchParams()}`)
       return response.data
     },
     enabled: !!tipo,
     staleTime: 5 * 60 * 1000,
-    ...options
+    ...queryOptions
   })
 }
 

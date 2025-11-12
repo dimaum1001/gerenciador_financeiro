@@ -21,6 +21,7 @@ from app.schemas.dashboard import (
     BudgetStatusSummary,
     BudgetStatusItem,
 )
+from app.utils.locale_mapper import transaction_type_mapper
 
 router = APIRouter()
 
@@ -193,13 +194,15 @@ async def get_cash_flow(
 
 @router.get("/categories-summary", response_model=List[CategorySummary])
 async def get_categories_summary(
-    tipo: str = Query(..., regex="^(income|expense)$"),
+    tipo: str = Query(..., regex="^(receita|despesa|income|expense)$"),
     year: int = Query(default=datetime.now().year),
     months: Optional[int] = Query(default=None, ge=1, le=60),
     month: Optional[int] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    tipo_enum = transaction_type_mapper.to_enum(tipo)
+
     query = (
         db.query(
             Category.nome.label("categoria"),
@@ -211,7 +214,7 @@ async def get_categories_summary(
         .filter(
             Transaction.user_id == current_user.id,
             Transaction.is_demo_data.is_(current_user.is_demo),
-            Transaction.tipo == tipo,
+            Transaction.tipo == tipo_enum,
             Category.is_demo_data.is_(current_user.is_demo),
         )
     )
@@ -322,7 +325,7 @@ async def get_upcoming_bills(
 
         days_until = (next_date - now).days
         if 0 <= days_until <= days:
-            status = "pending" if days_until >= 0 else "overdue"
+            status = "pendente" if days_until >= 0 else "vencido"
             upcoming.append(
                 UpcomingExpense(
                     description=expense.descricao,

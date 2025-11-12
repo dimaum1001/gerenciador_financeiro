@@ -169,7 +169,7 @@ function FluxoCaixaChart() {
 }
 
 function GastosCategoriasChart() {
-  const { data: categories, isLoading, error } = useCategoriesSummary('expense', 1)
+  const { data: categories, isLoading, error } = useCategoriesSummary('despesa', { months: 1 })
 
   if (isLoading) {
     return (

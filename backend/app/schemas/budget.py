@@ -7,14 +7,20 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional, List
 
-from pydantic import BaseModel, Field, ConfigDict, validator
+from pydantic import BaseModel, Field, ConfigDict, validator, computed_field, AliasChoices
 
 from app.models.budget import BudgetStatus
+from app.utils.locale_mapper import budget_status_mapper
 
 
 class BudgetBase(BaseModel):
     """Schema base para orçamento"""
-    category_id: uuid.UUID = Field(..., description="ID da categoria")
+    category_id: uuid.UUID = Field(
+        ...,
+        description="ID da categoria",
+        validation_alias=AliasChoices("categoria_id", "category_id"),
+        serialization_alias="categoria_id",
+    )
     ano: int = Field(..., ge=2000, le=2100, description="Ano do orçamento")
     mes: int = Field(..., ge=1, le=12, description="Mês do orçamento")
     valor_planejado: Decimal = Field(..., gt=0, description="Valor planejado")
@@ -23,6 +29,8 @@ class BudgetBase(BaseModel):
     alerta_percentual: int = Field(default=80, ge=0, le=100, description="Percentual para alerta")
     descricao: Optional[str] = Field(None, description="Descrição do orçamento")
     observacoes: Optional[str] = Field(None, description="Observações")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class BudgetCreate(BudgetBase):
@@ -68,7 +76,11 @@ class BudgetUpdate(BaseModel):
 class BudgetResponse(BudgetBase):
     """Schema de resposta para orçamento"""
     id: uuid.UUID
-    user_id: uuid.UUID
+    user_id: uuid.UUID = Field(
+        ...,
+        validation_alias=AliasChoices("usuario_id", "user_id"),
+        serialization_alias="usuario_id",
+    )
     valor_realizado: Decimal
     periodo_display: str
     percentual_utilizado: float
@@ -81,7 +93,15 @@ class BudgetResponse(BudgetBase):
     criado_em: datetime
     atualizado_em: datetime
     
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    @computed_field
+    def status_portugues(self) -> Optional[str]:
+        return budget_status_mapper.to_portuguese(self.status)
+
+    @computed_field
+    def status_legado(self) -> Optional[str]:
+        return budget_status_mapper.legacy_value(self.status)
 
 
 class BudgetWithCategory(BudgetResponse):

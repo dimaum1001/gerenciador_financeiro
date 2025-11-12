@@ -25,9 +25,6 @@ if (apiVersionPattern.test(sanitizedBaseUrl)) {
 const api = axios.create({
   baseURL: sanitizedBaseUrl,
   timeout: 10000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
 })
 
 // Interceptor para requests

@@ -12,18 +12,14 @@ import { Checkbox } from '@/components/ui/checkbox'
 import LoadingSpinner from '@/components/ui/loading-spinner'
 import { useApi } from '@/contexts/ApiContext'
 import { formatCurrency } from '@/lib/formatters'
+import { categoryTypeOptions, normalizeCategoryType, getField } from '@/lib/api-locale'
 import { Plus, Edit2, Trash2, RefreshCcw } from 'lucide-react'
-
-const categoryTypeOptions = [
-  { value: 'income', label: 'Receita' },
-  { value: 'expense', label: 'Despesa' },
-]
 
 function CategoryForm({ initialData, categories, onSubmit, onCancel, loading }) {
   const [form, setForm] = useState(() => ({
     nome: initialData?.nome ?? '',
-    tipo: initialData?.tipo ?? 'expense',
-    parent_id: initialData?.parent_id ?? '',
+    tipo: normalizeCategoryType(initialData?.tipo ?? 'despesa'),
+    categoria_pai_id: getField(initialData, 'categoria_pai_id', 'parent_id') ?? '',
     cor: initialData?.cor ?? '',
     descricao: initialData?.descricao ?? '',
     ativo: initialData?.ativo ?? true,
@@ -43,7 +39,7 @@ function CategoryForm({ initialData, categories, onSubmit, onCancel, loading }) 
     event.preventDefault()
     const payload = {
       ...form,
-      parent_id: form.parent_id || null,
+      categoria_pai_id: form.categoria_pai_id || null,
     }
     onSubmit(payload)
   }
@@ -77,8 +73,8 @@ function CategoryForm({ initialData, categories, onSubmit, onCancel, loading }) 
         <div className="space-y-2">
           <Label>Categoria pai</Label>
           <Select
-            value={form.parent_id || 'none'}
-            onValueChange={(value) => setForm((prev) => ({ ...prev, parent_id: value === 'none' ? '' : value }))}
+            value={form.categoria_pai_id || 'none'}
+            onValueChange={(value) => setForm((prev) => ({ ...prev, categoria_pai_id: value === 'none' ? '' : value }))}
           >
             <SelectTrigger>
               <SelectValue placeholder="Nenhuma" />
@@ -213,14 +209,14 @@ export default function CategoriesPage() {
 
   const resumo = useMemo(() => {
     const total = categories.length
-    const receitas = categories.filter((cat) => cat.tipo === 'income').length
-    const despesas = categories.filter((cat) => cat.tipo === 'expense').length
+    const receitas = categories.filter((cat) => normalizeCategoryType(cat.tipo) === 'receita').length
+    const despesas = categories.filter((cat) => normalizeCategoryType(cat.tipo) === 'despesa').length
     return { total, receitas, despesas }
   }, [categories])
 
   const transformHierarchy = (items, parentId = null, level = 0) => {
     return items
-      .filter((item) => (item.parent_id || null) === parentId)
+      .filter((item) => (getField(item, 'categoria_pai_id', 'parent_id') || null) === parentId)
       .flatMap((item) => [
         { ...item, level },
         ...transformHierarchy(items, item.id, level + 1),
@@ -308,7 +304,7 @@ export default function CategoriesPage() {
                       )}
                     </div>
                     <div className="text-sm text-muted-foreground">
-                      {category.tipo === 'income' ? 'Receita' : 'Despesa'}
+                      {normalizeCategoryType(category.tipo) === 'receita' ? 'Receita' : 'Despesa'}
                       {category.descricao ? ` • ${category.descricao}` : ''}
                     </div>
                   </div>

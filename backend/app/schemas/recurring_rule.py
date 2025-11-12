@@ -7,26 +7,62 @@ from datetime import datetime, date
 from decimal import Decimal
 from typing import Optional, List
 
-from pydantic import BaseModel, Field, ConfigDict, validator
+from pydantic import BaseModel, Field, ConfigDict, validator, computed_field, AliasChoices
 
 from app.models.recurring_rule import RecurrenceFrequency, RecurrenceStatus
 from app.models.transaction import TransactionType, PaymentMethod
+from app.utils.locale_mapper import (
+    transaction_type_mapper,
+    payment_method_mapper,
+    recurrence_frequency_mapper,
+    recurrence_status_mapper,
+)
 
 
 class RecurringRuleBase(BaseModel):
     """Schema base para regra de recorrência"""
-    account_id: uuid.UUID = Field(..., description="ID da conta")
-    category_id: Optional[uuid.UUID] = Field(None, description="ID da categoria")
+    account_id: uuid.UUID = Field(
+        ...,
+        description="ID da conta",
+        validation_alias=AliasChoices("conta_id", "account_id"),
+        serialization_alias="conta_id",
+    )
+    category_id: Optional[uuid.UUID] = Field(
+        None,
+        description="ID da categoria",
+        validation_alias=AliasChoices("categoria_id", "category_id"),
+        serialization_alias="categoria_id",
+    )
     nome: str = Field(..., min_length=1, max_length=100, description="Nome da regra")
     descricao_template: str = Field(..., min_length=1, max_length=255, description="Descrição template")
     tipo: TransactionType = Field(..., description="Tipo da transação")
     valor: Decimal = Field(..., gt=0, description="Valor da transação")
-    payment_method: Optional[PaymentMethod] = Field(None, description="Método de pagamento")
+    payment_method: Optional[PaymentMethod] = Field(
+        None,
+        description="Método de pagamento",
+        validation_alias=AliasChoices("metodo_pagamento", "payment_method"),
+        serialization_alias="metodo_pagamento",
+    )
     frequencia: RecurrenceFrequency = Field(..., description="Frequência de recorrência")
     intervalo: int = Field(default=1, ge=1, le=12, description="Intervalo entre execuções")
     data_inicio: date = Field(..., description="Data de início")
     data_fim: Optional[date] = Field(None, description="Data de fim (opcional)")
     ativo: bool = Field(default=True, description="Se a regra está ativa")
+    model_config = ConfigDict(populate_by_name=True)
+
+    @validator("tipo", pre=True)
+    def _normalize_tipo(cls, value):
+        return transaction_type_mapper.to_enum(value)
+
+    @validator("payment_method", pre=True)
+    def _normalize_payment_method(cls, value):
+        if value in (None, "", "none"):
+            return None
+        return payment_method_mapper.to_enum(value)
+
+    @validator("frequencia", pre=True)
+    def _normalize_frequencia(cls, value):
+        return recurrence_frequency_mapper.to_enum(value)
 
 
 class RecurringRuleCreate(RecurringRuleBase):
@@ -115,7 +151,11 @@ class RecurringRuleUpdate(BaseModel):
 class RecurringRuleResponse(RecurringRuleBase):
     """Schema de resposta para regra de recorrência"""
     id: uuid.UUID
-    user_id: uuid.UUID
+    user_id: uuid.UUID = Field(
+        ...,
+        validation_alias=AliasChoices("usuario_id", "user_id"),
+        serialization_alias="usuario_id",
+    )
     status: RecurrenceStatus
     frequencia_display: str
     status_display: str
@@ -147,7 +187,43 @@ class RecurringRuleResponse(RecurringRuleBase):
     criado_em: datetime
     atualizado_em: datetime
     
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    @validator("status", pre=True)
+    def _normalize_status(cls, value):
+        return recurrence_status_mapper.to_enum(value)
+
+    @computed_field
+    def tipo_portugues(self) -> Optional[str]:
+        return transaction_type_mapper.to_portuguese(self.tipo)
+
+    @computed_field
+    def tipo_legado(self) -> Optional[str]:
+        return transaction_type_mapper.legacy_value(self.tipo)
+
+    @computed_field
+    def metodo_pagamento_portugues(self) -> Optional[str]:
+        return payment_method_mapper.to_portuguese(self.payment_method)
+
+    @computed_field
+    def metodo_pagamento_legado(self) -> Optional[str]:
+        return payment_method_mapper.legacy_value(self.payment_method)
+
+    @computed_field
+    def frequencia_portugues(self) -> Optional[str]:
+        return recurrence_frequency_mapper.to_portuguese(self.frequencia)
+
+    @computed_field
+    def frequencia_legado(self) -> Optional[str]:
+        return recurrence_frequency_mapper.legacy_value(self.frequencia)
+
+    @computed_field
+    def status_portugues(self) -> Optional[str]:
+        return recurrence_status_mapper.to_portuguese(self.status)
+
+    @computed_field
+    def status_legado(self) -> Optional[str]:
+        return recurrence_status_mapper.legacy_value(self.status)
 
 
 class RecurringRuleWithDetails(RecurringRuleResponse):
@@ -172,6 +248,14 @@ class RecurringRuleSummary(BaseModel):
     category_name: Optional[str] = None
     
     model_config = ConfigDict(from_attributes=True)
+
+    @computed_field
+    def tipo_portugues(self) -> Optional[str]:
+        return transaction_type_mapper.to_portuguese(self.tipo)
+
+    @computed_field
+    def tipo_legado(self) -> Optional[str]:
+        return transaction_type_mapper.legacy_value(self.tipo)
 
 
 class RecurringRuleExecution(BaseModel):

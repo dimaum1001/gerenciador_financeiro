@@ -13,6 +13,7 @@ from sqlalchemy.orm import relationship
 
 from app.db.database import Base
 from app.db.types import GUID
+from app.models._enum_utils import enum_values
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -21,33 +22,42 @@ if TYPE_CHECKING:
 
 class AccountType(str, Enum):
     """Tipos de conta"""
-    CASH = "cash"           # Dinheiro/Carteira
-    CHECKING = "checking"   # Conta Corrente
-    SAVINGS = "savings"     # Poupança
-    CREDIT = "credit"       # Cartão de Crédito
-    INVESTMENT = "investment"  # Investimentos
-    OTHER = "other"         # Outros
+    CASH = "dinheiro"
+    CHECKING = "conta_corrente"
+    SAVINGS = "poupanca"
+    CREDIT = "cartao_credito"
+    INVESTMENT = "investimento"
+    OTHER = "outros"
 
 
 class Account(Base):
     """Modelo de conta financeira"""
     
-    __tablename__ = "accounts"
+    __tablename__ = "contas"
     __allow_unmapped__ = True
     
     # Campos principais
     id = Column(GUID, primary_key=True, default=uuid.uuid4, index=True)
     
     user_id = Column(
+        "usuario_id",
         GUID,
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("usuarios.id", ondelete="CASCADE"),
         nullable=False,
         index=True
     )
-    is_demo_data = Column(Boolean, default=False, nullable=False, index=True)
+    is_demo_data = Column("dados_demo", Boolean, default=False, nullable=False, index=True)
     
     nome = Column(String(100), nullable=False, index=True)
-    tipo = Column(SQLEnum(AccountType), nullable=False, index=True)
+    tipo = Column(
+        SQLEnum(
+            AccountType,
+            name="accounttype",
+            values_callable=enum_values,
+        ),
+        nullable=False,
+        index=True,
+    )
     
     # Saldos e valores
     saldo_inicial = Column(

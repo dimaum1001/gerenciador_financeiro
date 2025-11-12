@@ -13,6 +13,7 @@ from sqlalchemy.orm import relationship
 
 from app.db.database import Base
 from app.db.types import GUID
+from app.models._enum_utils import enum_values
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -23,49 +24,52 @@ if TYPE_CHECKING:
 
 class RecurrenceFrequency(str, Enum):
     """Frequência de recorrência"""
-    DAILY = "daily"         # Diário
-    WEEKLY = "weekly"       # Semanal
-    MONTHLY = "monthly"     # Mensal
-    QUARTERLY = "quarterly" # Trimestral
-    YEARLY = "yearly"       # Anual
+    DAILY = "diario"
+    WEEKLY = "semanal"
+    MONTHLY = "mensal"
+    QUARTERLY = "trimestral"
+    YEARLY = "anual"
 
 
 class RecurrenceStatus(str, Enum):
     """Status da regra de recorrência"""
-    ACTIVE = "active"       # Ativa
-    PAUSED = "paused"       # Pausada
-    COMPLETED = "completed" # Concluída
-    CANCELLED = "cancelled" # Cancelada
+    ACTIVE = "ativa"
+    PAUSED = "pausada"
+    COMPLETED = "concluida"
+    CANCELLED = "cancelada"
 
 
 class RecurringRule(Base):
     """Modelo de regra de recorrência"""
     
-    __tablename__ = "recurring_rules"
+    __tablename__ = "regras_recorrentes"
     __allow_unmapped__ = True
     
     # Campos principais
     id = Column(GUID, primary_key=True, default=uuid.uuid4, index=True)
     
     user_id = Column(
+        "usuario_id",
         GUID, 
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("usuarios.id", ondelete="CASCADE"),
         nullable=False,
         index=True
     )
-    is_demo_data = Column(Boolean, default=False, nullable=False, index=True)
+    is_demo_data = Column("dados_demo", Boolean, default=False, nullable=False, index=True)
     
     # Template da transação
     account_id = Column(
+        "conta_id",
         GUID, 
-        ForeignKey("accounts.id", ondelete="CASCADE"),
+        ForeignKey("contas.id", ondelete="CASCADE"),
         nullable=False,
         index=True
     )
     
     category_id = Column(
+        "categoria_id",
         GUID, 
-        ForeignKey("categories.id", ondelete="SET NULL"),
+        ForeignKey("categorias.id", ondelete="SET NULL"),
         nullable=True,
         index=True
     )
@@ -75,10 +79,18 @@ class RecurringRule(Base):
     descricao_template = Column(String(255), nullable=False)
     tipo = Column(String(20), nullable=False)  # income, expense, transfer
     valor = Column(Numeric(15, 2), nullable=False)
-    payment_method = Column(String(20), nullable=True)
+    payment_method = Column("metodo_pagamento", String(20), nullable=True)
     
     # Configurações de recorrência
-    frequencia = Column(SQLEnum(RecurrenceFrequency), nullable=False, index=True)
+    frequencia = Column(
+        SQLEnum(
+            RecurrenceFrequency,
+            name="recurrencefrequency",
+            values_callable=enum_values,
+        ),
+        nullable=False,
+        index=True,
+    )
     intervalo = Column(Integer, default=1, nullable=False)  # A cada X períodos
     
     # Configurações específicas
@@ -90,7 +102,17 @@ class RecurringRule(Base):
     data_fim = Column(Date, nullable=True, index=True)
     
     # Status e controle
-    status = Column(SQLEnum(RecurrenceStatus), default=RecurrenceStatus.ACTIVE, nullable=False, index=True)
+    status = Column(
+        "status_regra",
+        SQLEnum(
+            RecurrenceStatus,
+            name="recurrencestatus",
+            values_callable=enum_values,
+        ),
+        default=RecurrenceStatus.ACTIVE,
+        nullable=False,
+        index=True,
+    )
     ativo = Column(Boolean, default=True, nullable=False)
     
     # Controle de execução

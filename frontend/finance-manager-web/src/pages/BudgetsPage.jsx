@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import LoadingSpinner from '@/components/ui/loading-spinner'
 import { formatCurrency } from '@/lib/formatters'
+import { getField } from '@/lib/api-locale'
 import { Plus, Edit2, Trash2, RefreshCcw } from 'lucide-react'
 
 const monthOptions = [
@@ -20,7 +21,7 @@ const monthOptions = [
 
 function BudgetForm({ categories, initialData, onSubmit, onCancel, loading }) {
   const [form, setForm] = useState(() => ({
-    category_id: initialData?.category_id ?? (categories[0]?.id ?? ''),
+    categoria_id: getField(initialData, 'categoria_id', 'category_id') ?? (categories[0]?.id ?? ''),
     ano: initialData?.ano ?? new Date().getFullYear(),
     mes: initialData?.mes ?? new Date().getMonth() + 1,
     valor_planejado: initialData?.valor_planejado != null ? Number(initialData.valor_planejado).toString() : '0',
@@ -51,7 +52,7 @@ function BudgetForm({ categories, initialData, onSubmit, onCancel, loading }) {
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-2">
         <Label>Categoria</Label>
-        <Select value={form.category_id} onValueChange={(value) => setForm((prev) => ({ ...prev, category_id: value }))}>
+        <Select value={form.categoria_id} onValueChange={(value) => setForm((prev) => ({ ...prev, categoria_id: value }))}>
           <SelectTrigger>
             <SelectValue placeholder="Selecione a categoria" />
           </SelectTrigger>
@@ -309,7 +310,8 @@ export default function BudgetsPage() {
                 </thead>
                 <tbody>
                   {budgets.map((budget) => {
-                    const categoria = categories.find((cat) => cat.id === budget.category_id)
+                    const categoriaId = getField(budget, 'categoria_id', 'category_id')
+                    const categoria = categories.find((cat) => cat.id === categoriaId)
                     const restante = Number(budget.valor_planejado || 0) - Number(budget.valor_realizado || 0)
                     return (
                       <tr key={budget.id} className="border-b last:border-transparent">

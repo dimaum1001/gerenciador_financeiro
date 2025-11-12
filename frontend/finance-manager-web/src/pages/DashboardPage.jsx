@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import LoadingSpinner from '@/components/ui/loading-spinner'
 import { useApi } from '@/contexts/ApiContext'
 import { formatCurrency } from '@/lib/formatters'
+import { normalizeTransactionType, getField } from '@/lib/api-locale'
 import { RefreshCcw } from 'lucide-react'
 
 export default function DashboardPage() {
@@ -69,11 +70,11 @@ export default function DashboardPage() {
     })
 
     const receitasMes = monthTransactions
-      .filter((tx) => tx.tipo === 'income')
+      .filter((tx) => normalizeTransactionType(tx.tipo) === 'receita')
       .reduce((sum, tx) => sum + Number(tx.valor || 0), 0)
 
     const despesasMes = monthTransactions
-      .filter((tx) => tx.tipo === 'expense')
+      .filter((tx) => normalizeTransactionType(tx.tipo) === 'despesa')
       .reduce((sum, tx) => sum + Number(tx.valor || 0), 0)
 
     const saldoMes = receitasMes - despesasMes
@@ -100,7 +101,8 @@ export default function DashboardPage() {
         const utilizado = Number(budget.valor_realizado || 0)
         const planejado = Number(budget.valor_planejado || 0)
         const percentual = planejado > 0 ? Math.min((utilizado / planejado) * 100, 999) : 0
-        const categoria = categories.find((cat) => cat.id === budget.category_id)
+                    const categoriaId = getField(budget, 'categoria_id', 'category_id')
+                    const categoria = categories.find((cat) => cat.id === categoriaId)
         return {
           ...budget,
           percentual,
@@ -165,19 +167,23 @@ export default function DashboardPage() {
                 {ultimasTransacoes.length === 0 ? (
                   <p className="text-muted-foreground text-sm">Nenhuma transação registrada ainda.</p>
                 ) : (
-                  ultimasTransacoes.map((tx) => (
-                    <div key={tx.id} className="flex items-center justify-between border rounded-md px-3 py-2">
-                      <div>
-                        <div className="font-semibold">{tx.descricao}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {tx.data_lancamento} • {tx.tipo === 'income' ? 'Receita' : tx.tipo === 'expense' ? 'Despesa' : 'Transferência'}
+                  ultimasTransacoes.map((tx) => {
+                    const tipoNormalizado = normalizeTransactionType(tx.tipo)
+                    const valor = Number(tx.valor || 0)
+                    return (
+                      <div key={tx.id} className="flex items-center justify-between border rounded-md px-3 py-2">
+                        <div>
+                          <div className="font-semibold">{tx.descricao}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {tx.data_lancamento} • {tipoNormalizado === 'receita' ? 'Receita' : tipoNormalizado === 'despesa' ? 'Despesa' : 'Transferência'}
+                          </div>
+                        </div>
+                        <div className={`text-sm font-medium ${tipoNormalizado === 'receita' ? 'text-green-600' : tipoNormalizado === 'despesa' ? 'text-red-600' : 'text-blue-600'}`}>
+                          {formatCurrency(tipoNormalizado === 'despesa' ? valor * -1 : valor)}
                         </div>
                       </div>
-                      <div className={`text-sm font-medium ${tx.tipo === 'income' ? 'text-green-600' : tx.tipo === 'expense' ? 'text-red-600' : 'text-blue-600'}`}>
-                        {formatCurrency(tx.tipo === 'expense' ? Number(tx.valor || 0) * -1 : Number(tx.valor || 0))}
-                      </div>
-                    </div>
-                  ))
+                    )
+                  })
                 )}
               </CardContent>
             </Card>

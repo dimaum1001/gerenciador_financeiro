@@ -7,15 +7,30 @@ from datetime import datetime, date
 from decimal import Decimal
 from typing import Optional, List
 
-from pydantic import BaseModel, Field, ConfigDict, validator
+from pydantic import BaseModel, Field, ConfigDict, validator, computed_field, AliasChoices
 
 from app.models.transaction import TransactionType, TransactionStatus, PaymentMethod
+from app.utils.locale_mapper import (
+    transaction_type_mapper,
+    transaction_status_mapper,
+    payment_method_mapper,
+)
 
 
 class TransactionBase(BaseModel):
     """Schema base para transação"""
-    account_id: uuid.UUID = Field(..., description="ID da conta")
-    category_id: Optional[uuid.UUID] = Field(None, description="ID da categoria")
+    account_id: uuid.UUID = Field(
+        ...,
+        description="ID da conta",
+        validation_alias=AliasChoices("conta_id", "account_id"),
+        serialization_alias="conta_id",
+    )
+    category_id: Optional[uuid.UUID] = Field(
+        None,
+        description="ID da categoria",
+        validation_alias=AliasChoices("categoria_id", "category_id"),
+        serialization_alias="categoria_id",
+    )
     tipo: TransactionType = Field(..., description="Tipo da transação")
     valor: Decimal = Field(..., gt=0, description="Valor da transação")
     moeda: str = Field(default="BRL", max_length=3, description="Moeda")
@@ -24,8 +39,31 @@ class TransactionBase(BaseModel):
     descricao: str = Field(..., min_length=1, max_length=255, description="Descrição")
     observacoes: Optional[str] = Field(None, description="Observações adicionais")
     status: TransactionStatus = Field(default=TransactionStatus.PENDING, description="Status")
-    payment_method: Optional[PaymentMethod] = Field(None, description="Método de pagamento")
+    payment_method: Optional[PaymentMethod] = Field(
+        None,
+        description="Método de pagamento",
+        validation_alias=AliasChoices("metodo_pagamento", "payment_method"),
+        serialization_alias="metodo_pagamento",
+    )
     tags: List[str] = Field(default_factory=list, description="Tags da transação")
+
+    @validator("tipo", pre=True)
+    def _normalize_tipo(cls, value):
+        return transaction_type_mapper.to_enum(value)
+
+    @validator("status", pre=True, always=True)
+    def _normalize_status(cls, value):
+        if value is None:
+            return TransactionStatus.PENDING
+        return transaction_status_mapper.to_enum(value)
+
+    @validator("payment_method", pre=True)
+    def _normalize_payment_method(cls, value):
+        if value in (None, "", "none"):
+            return None
+        return payment_method_mapper.to_enum(value)
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class TransactionCreate(TransactionBase):
@@ -34,7 +72,12 @@ class TransactionCreate(TransactionBase):
     parcelas_total: Optional[int] = Field(None, ge=1, le=120, description="Total de parcelas")
     
     # Campos para transferência
-    transfer_account_id: Optional[uuid.UUID] = Field(None, description="Conta de destino para transferência")
+    transfer_account_id: Optional[uuid.UUID] = Field(
+        None,
+        description="Conta de destino para transferência",
+        validation_alias=AliasChoices("conta_transferencia_id", "transfer_account_id"),
+        serialization_alias="conta_transferencia_id",
+    )
     
     @validator('transfer_account_id')
     def validate_transfer(cls, v, values):
@@ -66,7 +109,8 @@ class TransactionCreate(TransactionBase):
                 "payment_method": "debit",
                 "tags": ["supermercado", "alimentação"]
             }
-        }
+        },
+        populate_by_name=True
     )
 
 
@@ -81,6 +125,18 @@ class TransactionUpdate(BaseModel):
     status: Optional[TransactionStatus] = None
     payment_method: Optional[PaymentMethod] = None
     tags: Optional[List[str]] = None
+
+    @validator("status", pre=True)
+    def _normalize_status(cls, value):
+        if value in (None, ""):
+            return None
+        return transaction_status_mapper.to_enum(value)
+
+    @validator("payment_method", pre=True)
+    def _normalize_payment_method(cls, value):
+        if value in (None, "", "none"):
+            return None
+        return payment_method_mapper.to_enum(value)
     
     model_config = ConfigDict(
         json_schema_extra={
@@ -96,7 +152,11 @@ class TransactionUpdate(BaseModel):
 class TransactionResponse(TransactionBase):
     """Schema de resposta para transação"""
     id: uuid.UUID
-    user_id: uuid.UUID
+    user_id: uuid.UUID = Field(
+        ...,
+        validation_alias=AliasChoices("usuario_id", "user_id"),
+        serialization_alias="usuario_id",
+    )
     valor_formatado: str
     is_income: bool
     is_expense: bool
@@ -126,12 +186,36 @@ class TransactionResponse(TransactionBase):
     # Campos de conciliação
     reconciled_at: Optional[datetime] = None
     bank_reference: Optional[str] = None
+
+    @computed_field
+    def tipo_portugues(self) -> Optional[str]:
+        return transaction_type_mapper.to_portuguese(self.tipo)
+
+    @computed_field
+    def tipo_legado(self) -> Optional[str]:
+        return transaction_type_mapper.legacy_value(self.tipo)
+
+    @computed_field
+    def status_portugues(self) -> Optional[str]:
+        return transaction_status_mapper.to_portuguese(self.status)
+
+    @computed_field
+    def status_legado(self) -> Optional[str]:
+        return transaction_status_mapper.legacy_value(self.status)
+
+    @computed_field
+    def metodo_pagamento_portugues(self) -> Optional[str]:
+        return payment_method_mapper.to_portuguese(self.payment_method)
+
+    @computed_field
+    def metodo_pagamento_legado(self) -> Optional[str]:
+        return payment_method_mapper.legacy_value(self.payment_method)
     
     # Timestamps
     criado_em: datetime
     atualizado_em: datetime
     
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class TransactionWithDetails(TransactionResponse):
@@ -141,7 +225,7 @@ class TransactionWithDetails(TransactionResponse):
     category_color: Optional[str] = None
     transfer_account_name: Optional[str] = None
     
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class TransactionSummary(BaseModel):
@@ -175,7 +259,12 @@ class TransactionListResponse(BaseModel):
 
 class TransactionImport(BaseModel):
     """Schema para importação de transações"""
-    account_id: uuid.UUID = Field(..., description="Conta de destino")
+    account_id: uuid.UUID = Field(
+        ...,
+        description="Conta de destino",
+        validation_alias=AliasChoices("conta_id", "account_id"),
+        serialization_alias="conta_id",
+    )
     file_type: str = Field(..., description="Tipo do arquivo (csv, ofx)")
     column_mapping: dict = Field(..., description="Mapeamento de colunas")
     dry_run: bool = Field(default=True, description="Executar em modo teste")
@@ -254,8 +343,16 @@ class TransactionFilter(BaseModel):
     date_to: Optional[date] = None
     month: Optional[int] = Field(None, ge=1, le=12)
     year: Optional[int] = Field(None, ge=2000)
-    account_id: Optional[uuid.UUID] = None
-    category_id: Optional[uuid.UUID] = None
+    account_id: Optional[uuid.UUID] = Field(
+        None,
+        validation_alias=AliasChoices("conta_id", "account_id"),
+        serialization_alias="conta_id",
+    )
+    category_id: Optional[uuid.UUID] = Field(
+        None,
+        validation_alias=AliasChoices("categoria_id", "category_id"),
+        serialization_alias="categoria_id",
+    )
     tipo: Optional[TransactionType] = None
     status: Optional[TransactionStatus] = None
     payment_method: Optional[PaymentMethod] = None
@@ -279,3 +376,21 @@ class TransactionFilter(BaseModel):
             }
         }
     )
+
+    @validator("tipo", pre=True)
+    def _filter_tipo(cls, value):
+        if value in (None, ""):
+            return None
+        return transaction_type_mapper.to_enum(value)
+
+    @validator("status", pre=True)
+    def _filter_status(cls, value):
+        if value in (None, ""):
+            return None
+        return transaction_status_mapper.to_enum(value)
+
+    @validator("payment_method", pre=True)
+    def _filter_payment_method(cls, value):
+        if value in (None, "", "none"):
+            return None
+        return payment_method_mapper.to_enum(value)

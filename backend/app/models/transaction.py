@@ -13,6 +13,7 @@ from sqlalchemy.orm import relationship
 
 from app.db.database import Base
 from app.db.types import GUID
+from app.models._enum_utils import enum_values
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -23,63 +24,74 @@ if TYPE_CHECKING:
 
 class TransactionType(str, Enum):
     """Tipos de transação"""
-    INCOME = "income"       # Receita
-    EXPENSE = "expense"     # Despesa
-    TRANSFER = "transfer"   # Transferência
+    INCOME = "receita"
+    EXPENSE = "despesa"
+    TRANSFER = "transferencia"
 
 
 class TransactionStatus(str, Enum):
     """Status da transação"""
-    PENDING = "pending"         # Pendente
-    CLEARED = "cleared"         # Compensada
-    RECONCILED = "reconciled"   # Conciliada
+    PENDING = "pendente"
+    CLEARED = "compensada"
+    RECONCILED = "conciliada"
 
 
 class PaymentMethod(str, Enum):
     """Métodos de pagamento"""
-    CASH = "cash"           # Dinheiro
-    PIX = "pix"             # PIX
-    DEBIT = "debit"         # Cartão de Débito
-    CREDIT = "credit"       # Cartão de Crédito
-    BOLETO = "boleto"       # Boleto
-    TRANSFER = "transfer"   # Transferência
-    CHECK = "check"         # Cheque
-    OTHER = "other"         # Outros
+    CASH = "dinheiro"
+    PIX = "pix"
+    DEBIT = "cartao_debito"
+    CREDIT = "cartao_credito"
+    BOLETO = "boleto"
+    TRANSFER = "transferencia"
+    CHECK = "cheque"
+    OTHER = "outros"
 
 
 class Transaction(Base):
     """Modelo de transação financeira"""
     
-    __tablename__ = "transactions"
+    __tablename__ = "transacoes"
     __allow_unmapped__ = True
     
     # Campos principais
     id = Column(GUID, primary_key=True, default=uuid.uuid4, index=True)
     
     user_id = Column(
+        "usuario_id",
         GUID,
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("usuarios.id", ondelete="CASCADE"),
         nullable=False,
         index=True
     )
-    is_demo_data = Column(Boolean, default=False, nullable=False, index=True)
+    is_demo_data = Column("dados_demo", Boolean, default=False, nullable=False, index=True)
     
     account_id = Column(
+        "conta_id",
         GUID,
-        ForeignKey("accounts.id", ondelete="CASCADE"),
+        ForeignKey("contas.id", ondelete="CASCADE"),
         nullable=False,
         index=True
     )
     
     category_id = Column(
+        "categoria_id",
         GUID,
-        ForeignKey("categories.id", ondelete="SET NULL"),
+        ForeignKey("categorias.id", ondelete="SET NULL"),
         nullable=True,
         index=True
     )
     
     # Dados da transação
-    tipo = Column(SQLEnum(TransactionType), nullable=False, index=True)
+    tipo = Column(
+        SQLEnum(
+            TransactionType,
+            name="transactiontype",
+            values_callable=enum_values,
+        ),
+        nullable=False,
+        index=True,
+    )
     valor = Column(Numeric(15, 2), nullable=False)
     moeda = Column(String(3), default="BRL", nullable=False)
     
@@ -92,15 +104,33 @@ class Transaction(Base):
     observacoes = Column(Text, nullable=True)
     
     # Status e método
-    status = Column(SQLEnum(TransactionStatus), default=TransactionStatus.PENDING, nullable=False, index=True)
-    payment_method = Column(SQLEnum(PaymentMethod), nullable=True, index=True)
+    status = Column(
+        SQLEnum(
+            TransactionStatus,
+            name="transactionstatus",
+            values_callable=enum_values,
+        ),
+        default=TransactionStatus.PENDING,
+        nullable=False,
+        index=True,
+    )
+    payment_method = Column(
+        "metodo_pagamento",
+        SQLEnum(
+            PaymentMethod,
+            name="paymentmethod",
+            values_callable=enum_values,
+        ),
+        nullable=True,
+        index=True,
+    )
     
     # Tags e categorização
     tags = Column(JSON, nullable=True, default=list)
     
     # Anexos
-    attachment_url = Column(Text, nullable=True)
-    attachment_name = Column(String(255), nullable=True)
+    attachment_url = Column("anexo_url", Text, nullable=True)
+    attachment_name = Column("anexo_nome", String(255), nullable=True)
     
     # Parcelas
     parcela_atual = Column(Integer, nullable=True)
@@ -109,29 +139,32 @@ class Transaction(Base):
     
     # Transferências
     transfer_account_id = Column(
+        "conta_transferencia_id",
         GUID,
-        ForeignKey("accounts.id", ondelete="SET NULL"),
+        ForeignKey("contas.id", ondelete="SET NULL"),
         nullable=True,
         index=True
     )
     transfer_transaction_id = Column(
+        "transacao_transferencia_id",
         GUID,
-        ForeignKey("transactions.id", ondelete="SET NULL"),
+        ForeignKey("transacoes.id", ondelete="SET NULL"),
         nullable=True,
         index=True
     )
     
     # Recorrência
     recurring_rule_id = Column(
+        "regra_recorrente_id",
         GUID,
-        ForeignKey("recurring_rules.id", ondelete="SET NULL"),
+        ForeignKey("regras_recorrentes.id", ondelete="SET NULL"),
         nullable=True,
         index=True
     )
     
     # Conciliação
     reconciled_at = Column(DateTime, nullable=True)
-    bank_reference = Column(String(100), nullable=True)
+    bank_reference = Column("referencia_bancaria", String(100), nullable=True)
     
     # Timestamps
     criado_em = Column(

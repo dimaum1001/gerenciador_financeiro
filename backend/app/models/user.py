@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 class User(Base):
     """Modelo de usuário do sistema"""
     
-    __tablename__ = "users"
+    __tablename__ = "usuarios"
     __allow_unmapped__ = True
     
     # Campos principais
@@ -40,10 +40,10 @@ class User(Base):
     # Status e configurações
     ativo = Column(Boolean, default=True, nullable=False)
     email_verificado = Column(Boolean, default=False, nullable=False)
-    is_demo = Column(Boolean, default=False, nullable=False)
+    is_demo = Column("demo", Boolean, default=False, nullable=False)
     
     # Preferências
-    timezone = Column(String(50), default="America/Sao_Paulo", nullable=False)
+    timezone = Column("fuso_horario", String(50), default="America/Sao_Paulo", nullable=False)
     moeda_padrao = Column(String(3), default="BRL", nullable=False)
     formato_data = Column(String(20), default="DD/MM/YYYY", nullable=False)
     

@@ -7,6 +7,7 @@ from app.core.deps import get_current_user, get_current_non_demo_user, get_db
 from app.models.user import User
 from app.models.category import Category, CategoryType
 from app.schemas.category import CategoryCreate, CategoryUpdate, CategoryResponse, CategoryListResponse
+from app.utils.locale_mapper import category_type_mapper
 
 router = APIRouter()
 
@@ -34,7 +35,7 @@ async def list_categories(
     # Aplicar filtros
     if tipo:
         try:
-            tipo_enum = CategoryType(tipo)
+            tipo_enum = category_type_mapper.to_enum(tipo)
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -266,12 +267,12 @@ async def get_category_tree(
 ):
     """Obter árvore hierárquica de categorias"""
     try:
-        tipo_enum = CategoryType(tipo)
+        tipo_enum = category_type_mapper.to_enum(tipo)
     except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Tipo deve ser 'income' ou 'expense'",
-        )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Tipo deve ser 'receita' ou 'despesa' (aceita também income/expense).",
+            )
     
     categories = (
         db.query(Category)

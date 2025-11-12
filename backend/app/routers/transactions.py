@@ -1,19 +1,49 @@
-from typing import Optional
+﻿import uuid
+from typing import Optional, List, Tuple, Dict, Any
 from datetime import datetime, date
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from decimal import Decimal, InvalidOperation
+from io import BytesIO
+from uuid import UUID
+from zipfile import BadZipFile
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+    Query,
+    UploadFile,
+    File,
+    Form,
+)
+from openpyxl import load_workbook
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_, desc, func, extract
 
+from app.core.config import settings
 from app.core.deps import get_current_user, get_current_non_demo_user, get_db
 from app.models.user import User
-from decimal import Decimal
 
-from app.models.transaction import Transaction, TransactionType, TransactionStatus
+from app.models.transaction import (
+    Transaction,
+    TransactionType,
+    TransactionStatus,
+    PaymentMethod,
+)
 from app.models.account import Account
-from app.models.category import Category
+from app.models.category import Category, CategoryType
 from app.schemas.transaction import (
-    TransactionCreate, TransactionUpdate, TransactionResponse, 
-    TransactionListResponse, TransactionSummary
+    TransactionCreate,
+    TransactionUpdate,
+    TransactionResponse,
+    TransactionListResponse,
+    TransactionSummary,
+    TransactionImportResult,
+)
+from app.utils.locale_mapper import (
+    transaction_type_mapper,
+    transaction_status_mapper,
+    payment_method_mapper,
 )
 
 router = APIRouter()
@@ -39,6 +69,247 @@ def _category_query(db: Session, current_user: User):
         Category.is_demo_data.is_(current_user.is_demo),
     )
 
+
+def _row_is_empty(row: Tuple[Any, ...]) -> bool:
+    """
+    Verifica se a linha do Excel est�� vazia (todos os valores nulos ou strings vazias)
+    """
+    return all(
+        cell is None or (isinstance(cell, str) and not cell.strip())
+        for cell in row
+    )
+
+
+def _parse_date_value(value: Any, field_name: str, required: bool = False) -> Optional[date]:
+    """
+    Converte valores aceitos em datas (date, datetime ou string ISO).
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        if required:
+            raise ValueError(f"Campo '{field_name}' �� obrigat��rio")
+        return None
+    
+    if isinstance(value, datetime):
+        return value.date()
+    
+    if isinstance(value, date):
+        return value
+    
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            return date.fromisoformat(text)
+        except ValueError:
+            raise ValueError(f"Campo '{field_name}' deve estar no formato AAAA-MM-DD")
+    
+    raise ValueError(f"Campo '{field_name}' possui formato de data inv��lido")
+
+
+def _parse_decimal_value(value: Any) -> Decimal:
+    """
+    Normaliza valores num��ricos vindo da planilha.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        raise ValueError("Campo 'valor' �� obrigat��rio")
+    
+    decimal_value: Decimal
+    
+    if isinstance(value, Decimal):
+        decimal_value = value
+    elif isinstance(value, (int, float)):
+        decimal_value = Decimal(str(value))
+    elif isinstance(value, str):
+        text = (
+            value.replace("R$", "")
+            .replace(" ", "")
+            .replace("\u00a0", "")
+            .strip()
+        )
+        if not text:
+            raise ValueError("Campo 'valor' �� obrigat��rio")
+        
+        comma_count = text.count(",")
+        dot_count = text.count(".")
+        
+        if comma_count and dot_count:
+            if text.rfind(",") > text.rfind("."):
+                text = text.replace(".", "").replace(",", ".")
+            else:
+                text = text.replace(",", "")
+        elif comma_count and not dot_count:
+            if comma_count == 1:
+                text = text.replace(",", ".")
+            else:
+                text = text.replace(",", "")
+        elif dot_count > 1:
+            text = text.replace(".", "")
+        
+        try:
+            decimal_value = Decimal(text)
+        except InvalidOperation:
+            raise ValueError("Campo 'valor' possui formato num��rico inv��lido")
+    else:
+        raise ValueError("Campo 'valor' possui formato n��o suportado")
+    
+    if decimal_value <= 0:
+        raise ValueError("Campo 'valor' deve ser maior que zero")
+    
+    try:
+        return decimal_value.quantize(Decimal("0.01"))
+    except InvalidOperation:
+        raise ValueError("Campo 'valor' deve ter no m��ximo duas casas decimais")
+
+
+def _extract_tags(raw_value: Any) -> List[str]:
+    if raw_value in (None, "", []):
+        return []
+    
+    if isinstance(raw_value, str):
+        parts = raw_value.split(",")
+    elif isinstance(raw_value, (list, tuple, set)):
+        parts = [str(item) for item in raw_value]
+    else:
+        return []
+    
+    return [tag.strip() for tag in parts if tag and tag.strip()]
+
+
+def _ensure_category_for_import(
+    category_name: str,
+    transaction_type: TransactionType,
+    category_lookup: Dict[str, Category],
+    current_user: User,
+    db: Session,
+    dry_run: bool,
+) -> Category:
+    """Retorna categoria existente ou cria uma nova automaticamente durante importação."""
+    normalized_name = (category_name or "").strip()
+    if not normalized_name:
+        return None
+
+    lookup_key = normalized_name.lower()
+    existing = category_lookup.get(lookup_key)
+    if existing:
+        return existing
+
+    category_type = (
+        CategoryType.INCOME if transaction_type == TransactionType.INCOME else CategoryType.EXPENSE
+    )
+
+    new_category = Category(
+        id=uuid.uuid4(),
+        nome=normalized_name,
+        tipo=category_type,
+        user_id=current_user.id,
+        is_demo_data=current_user.is_demo,
+        ativo=True,
+    )
+
+    if not dry_run:
+        db.add(new_category)
+
+    category_lookup[lookup_key] = new_category
+    return new_category
+
+
+
+def _prepare_transaction_from_row(
+    row_data: Dict[str, Any],
+    line_number: int,
+    category_lookup: Dict[str, Category],
+    current_user: User,
+    db: Session,
+    dry_run: bool,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Converte uma linha da planilha em dados prontos para criar uma transa��ǜo.
+    """
+    tipo_raw = str(row_data.get("tipo") or "").strip()
+    if not tipo_raw:
+        raise ValueError("Campo 'tipo' ������ obrigat������rio")
+
+    try:
+        tipo = transaction_type_mapper.to_enum(tipo_raw)
+    except ValueError:
+        raise ValueError("Tipo invǭlido. Use receita, despesa ou transferǦncia (ou income/expense/transfer).")
+
+    if tipo == TransactionType.TRANSFER:
+        raise ValueError("Importa������o de transfer������ncias n������o ������ suportada neste modelo")
+
+    data_lancamento = _parse_date_value(row_data.get("data_lancamento"), "data_lancamento", required=True)
+    descricao = str(row_data.get("descricao") or "").strip()
+    if not descricao:
+        raise ValueError("Campo 'descricao' ������ obrigat������rio")
+    descricao = descricao[:255]
+
+    valor = _parse_decimal_value(row_data.get("valor"))
+
+    moeda = str(row_data.get("moeda") or "BRL").strip().upper() or "BRL"
+    moeda = moeda[:3]
+
+    status_raw = str(row_data.get("status") or TransactionStatus.PENDING.value).strip()
+    try:
+        status = transaction_status_mapper.to_enum(status_raw)
+    except ValueError:
+        raise ValueError("Status inv������lido. Use pendente, compensada ou conciliada (ou pending/cleared/reconciled)")
+
+    payment_method_raw = str(row_data.get("payment_method") or "").strip()
+    payment_method = None
+    if payment_method_raw:
+        try:
+            payment_method = payment_method_mapper.to_enum(payment_method_raw)
+        except ValueError:
+            raise ValueError("M������todo de pagamento inv������lido")
+
+    categoria_nome = row_data.get("categoria_nome")
+    category = None
+    if categoria_nome:
+        categoria_key = str(categoria_nome).strip().lower()
+        category = category_lookup.get(categoria_key)
+        if not category:
+            category = _ensure_category_for_import(
+                category_name=str(categoria_nome),
+                transaction_type=tipo,
+                category_lookup=category_lookup,
+                current_user=current_user,
+                db=db,
+                dry_run=dry_run,
+            )
+
+    data_competencia = _parse_date_value(row_data.get("data_competencia"), "data_competencia")
+    tags = _extract_tags(row_data.get("tags"))
+    observacoes_raw = row_data.get("observacoes")
+    observacoes = str(observacoes_raw).strip() if observacoes_raw not in (None, "") else None
+
+    payload = {
+        "tipo": tipo,
+        "valor": valor,
+        "moeda": moeda,
+        "data_lancamento": data_lancamento,
+        "descricao": descricao,
+        "status": status,
+        "payment_method": payment_method,
+        "category_id": category.id if category else None,
+        "data_competencia": data_competencia,
+        "tags": tags,
+        "observacoes": observacoes,
+    }
+
+    preview_entry = {
+        "linha": line_number,
+        "tipo": tipo.value,
+        "descricao": descricao,
+        "valor": float(valor),
+        "moeda": moeda,
+        "data_lancamento": data_lancamento.isoformat(),
+        "categoria": category.nome if category else None,
+        "status": status.value,
+    }
+
+    if payment_method:
+        preview_entry["payment_method"] = payment_method.value
+
+    return payload, preview_entry
 @router.get("/", response_model=TransactionListResponse)
 async def list_transactions(
     skip: int = 0,
@@ -66,7 +337,7 @@ async def list_transactions(
     # Aplicar filtros
     if tipo:
         try:
-            tipo_enum = TransactionType(tipo)
+            tipo_enum = transaction_type_mapper.to_enum(tipo)
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -85,7 +356,7 @@ async def list_transactions(
     
     if status:
         try:
-            status_enum = TransactionStatus(status)
+            status_enum = transaction_status_mapper.to_enum(status)
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -187,6 +458,175 @@ async def create_transaction(
     
     return transaction
 
+
+@router.post("/import", response_model=TransactionImportResult)
+async def import_transactions_from_template(
+    account_id: UUID = Form(...),
+    dry_run: bool = Form(True),
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_non_demo_user),
+    db: Session = Depends(get_db),
+):
+    """Importar transa����es a partir do template Excel."""
+    if not settings.enable_import:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Importa��o est�� desabilitada neste ambiente",
+        )
+    
+    conta_destino = (
+        _account_query(db, current_user)
+        .filter(Account.id == account_id)
+        .first()
+    )
+    if not conta_destino:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Conta de destino n��o encontrada",
+        )
+    
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".xlsx"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Envie um arquivo .xlsx gerado a partir do modelo disponibilizado",
+        )
+    
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Arquivo recebido est�� vazio",
+        )
+    
+    try:
+        workbook = load_workbook(filename=BytesIO(contents), data_only=True)
+    except BadZipFile:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Arquivo corrompido ou formato inv��lido. Gere o modelo novamente.",
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="N��o foi poss��vel ler o arquivo enviado",
+        )
+    
+    if "Transacoes" not in workbook.sheetnames:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A planilha deve conter a aba 'Transacoes'",
+        )
+    
+    sheet = workbook["Transacoes"]
+    try:
+        header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))
+    except StopIteration:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Planilha sem cabe��alho. Use o modelo atualizado.",
+        )
+    
+    header_map: List[Optional[str]] = []
+    for header_cell in header_row:
+        if isinstance(header_cell, str):
+            normalized = header_cell.strip().lower()
+            header_map.append(normalized if normalized else None)
+        elif header_cell is None:
+            header_map.append(None)
+        else:
+            header_map.append(str(header_cell).strip().lower())
+    
+    if not any(header_map):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cabe��alho n��o encontrado. Verifique o modelo utilizado.",
+        )
+    
+    required_columns = {"tipo", "data_lancamento", "descricao", "valor"}
+    header_set = {name for name in header_map if name}
+    missing_columns = required_columns - header_set
+    if missing_columns:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Colunas obrigat��rias ausentes: {', '.join(sorted(missing_columns))}",
+        )
+    
+    category_lookup = {
+        (category.nome or "").strip().lower(): category
+        for category in _category_query(db, current_user).all()
+        if category.nome
+    }
+    
+    total_rows = 0
+    processed_rows = 0
+    errors: List[str] = []
+    preview: List[Dict[str, Any]] = []
+    rows_to_create: List[Dict[str, Any]] = []
+    
+    for line_number, row in enumerate(
+        sheet.iter_rows(min_row=2, values_only=True), start=2
+    ):
+        if row is None or _row_is_empty(row):
+            continue
+        
+        total_rows += 1
+        row_dict: Dict[str, Any] = {}
+        for idx, value in enumerate(row):
+            if idx >= len(header_map):
+                break
+            header_name = header_map[idx]
+            if header_name:
+                row_dict[header_name] = value
+        
+        try:
+            payload, preview_entry = _prepare_transaction_from_row(
+                row_dict,
+                line_number,
+                category_lookup,
+                current_user,
+                db,
+                dry_run,
+            )
+        except ValueError as exc:
+            errors.append(f"Linha {line_number}: {exc}")
+            continue
+        
+        rows_to_create.append(payload)
+        processed_rows += 1
+        if len(preview) < 5:
+            preview.append(preview_entry)
+    
+    created_transactions: List[Transaction] = []
+    if rows_to_create and not dry_run:
+        try:
+            for payload in rows_to_create:
+                transaction = Transaction(
+                    **payload,
+                    account_id=account_id,
+                    user_id=current_user.id,
+                    is_demo_data=current_user.is_demo,
+                )
+                db.add(transaction)
+                created_transactions.append(transaction)
+            
+            db.commit()
+            
+            for transaction in created_transactions:
+                db.refresh(transaction)
+                await _update_account_balances(transaction, db)
+        except Exception:
+            db.rollback()
+            raise
+    
+    return TransactionImportResult(
+        total_linhas=total_rows,
+        linhas_processadas=processed_rows,
+        linhas_com_erro=len(errors),
+        transacoes_criadas=len(created_transactions) if not dry_run else 0,
+        erros=errors,
+        preview=preview,
+    )
 @router.get("/{transaction_id}", response_model=TransactionResponse)
 async def get_transaction(
     transaction_id: str,
@@ -281,7 +721,7 @@ async def get_monthly_summary(
         and_(
             Transaction.user_id == current_user.id,
             demo_condition,
-            Transaction.tipo == 'income',
+            Transaction.tipo == TransactionType.INCOME.value,
             extract('year', Transaction.data_lancamento) == year,
             extract('month', Transaction.data_lancamento) == month
         )
@@ -292,7 +732,7 @@ async def get_monthly_summary(
         and_(
             Transaction.user_id == current_user.id,
             demo_condition,
-            Transaction.tipo == 'expense',
+            Transaction.tipo == TransactionType.EXPENSE.value,
             extract('year', Transaction.data_lancamento) == year,
             extract('month', Transaction.data_lancamento) == month
         )
@@ -303,7 +743,7 @@ async def get_monthly_summary(
         and_(
             Transaction.user_id == current_user.id,
             demo_condition,
-            Transaction.tipo == 'transfer',
+            Transaction.tipo == TransactionType.TRANSFER.value,
             extract('year', Transaction.data_lancamento) == year,
             extract('month', Transaction.data_lancamento) == month
         )
@@ -380,3 +820,4 @@ async def _update_account_balances(transaction: Transaction, db: Session) -> Non
 async def _revert_account_balances(transaction: Transaction, db: Session) -> None:
     """Reverte o efeito da transação nas contas."""
     _apply_account_balances(transaction, db, multiplier=-1)
+

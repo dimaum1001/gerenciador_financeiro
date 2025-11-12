@@ -21,32 +21,34 @@ if TYPE_CHECKING:
 
 class BudgetStatus(str, Enum):
     """Status do orçamento"""
-    ACTIVE = "active"       # Ativo
-    PAUSED = "paused"       # Pausado
-    COMPLETED = "completed" # Concluído
-    EXCEEDED = "exceeded"   # Excedido
+    ACTIVE = "ativo"
+    PAUSED = "pausado"
+    COMPLETED = "concluido"
+    EXCEEDED = "excedido"
 
 
 class Budget(Base):
     """Modelo de orçamento"""
     
-    __tablename__ = "budgets"
+    __tablename__ = "orcamentos"
     __allow_unmapped__ = True
     
     # Campos principais
     id = Column(GUID, primary_key=True, default=uuid.uuid4, index=True)
     
     user_id = Column(
+        "usuario_id",
         GUID, 
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("usuarios.id", ondelete="CASCADE"),
         nullable=False,
         index=True
     )
-    is_demo_data = Column(Boolean, default=False, nullable=False, index=True)
+    is_demo_data = Column("dados_demo", Boolean, default=False, nullable=False, index=True)
     
     category_id = Column(
+        "categoria_id",
         GUID, 
-        ForeignKey("categories.id", ondelete="CASCADE"),
+        ForeignKey("categorias.id", ondelete="CASCADE"),
         nullable=False,
         index=True
     )

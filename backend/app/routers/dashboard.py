@@ -141,23 +141,62 @@ async def get_dashboard_summary(
 @router.get("/cash-flow", response_model=List[MonthlyFlow])
 async def get_cash_flow(
     months: int = Query(default=6, ge=1, le=24),
+    year: Optional[int] = Query(default=None, ge=2000, le=2100),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     now = datetime.now()
     flows: List[MonthlyFlow] = []
 
+    if year:
+        for month in range(1, 13):
+            income = (
+                _transaction_query(db, current_user)
+                .with_entities(func.sum(Transaction.valor))
+                .filter(
+                    Transaction.tipo == TransactionType.INCOME,
+                    extract("year", Transaction.data_lancamento) == year,
+                    extract("month", Transaction.data_lancamento) == month,
+                )
+                .scalar()
+                or Decimal("0")
+            )
+
+            expenses = (
+                _transaction_query(db, current_user)
+                .with_entities(func.sum(Transaction.valor))
+                .filter(
+                    Transaction.tipo == TransactionType.EXPENSE,
+                    extract("year", Transaction.data_lancamento) == year,
+                    extract("month", Transaction.data_lancamento) == month,
+                )
+                .scalar()
+                or Decimal("0")
+            )
+
+            flows.append(
+                MonthlyFlow(
+                    month=month,
+                    year=year,
+                    month_name=datetime(year, month, 1).strftime("%b"),
+                    income=float(income),
+                    expenses=float(abs(expenses)),
+                    balance=float(income + expenses),
+                )
+            )
+        return flows
+
     for i in range(months):
         target_date = now - timedelta(days=30 * i)
         month = target_date.month
-        year = target_date.year
+        year_value = target_date.year
 
         income = (
             _transaction_query(db, current_user)
             .with_entities(func.sum(Transaction.valor))
             .filter(
                 Transaction.tipo == TransactionType.INCOME,
-                extract("year", Transaction.data_lancamento) == year,
+                extract("year", Transaction.data_lancamento) == year_value,
                 extract("month", Transaction.data_lancamento) == month,
             )
             .scalar()
@@ -169,7 +208,7 @@ async def get_cash_flow(
             .with_entities(func.sum(Transaction.valor))
             .filter(
                 Transaction.tipo == TransactionType.EXPENSE,
-                extract("year", Transaction.data_lancamento) == year,
+                extract("year", Transaction.data_lancamento) == year_value,
                 extract("month", Transaction.data_lancamento) == month,
             )
             .scalar()
@@ -179,8 +218,8 @@ async def get_cash_flow(
         flows.append(
             MonthlyFlow(
                 month=month,
-                year=year,
-                month_name=datetime(year, month, 1).strftime("%b"),
+                year=year_value,
+                month_name=datetime(year_value, month, 1).strftime("%b"),
                 income=float(income),
                 expenses=float(abs(expenses)),
                 balance=float(income + expenses),

@@ -1,11 +1,12 @@
 ﻿import uuid
-from typing import Optional, List, Tuple, Dict, Any
+from typing import Optional, List, Tuple, Dict, Any, Set
 from datetime import datetime, date
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from uuid import UUID
 from zipfile import BadZipFile
 
+import unicodedata
 from fastapi import (
     APIRouter,
     Depends,
@@ -30,7 +31,7 @@ from app.models.transaction import (
     TransactionStatus,
     PaymentMethod,
 )
-from app.models.account import Account
+from app.models.account import Account, AccountType
 from app.models.category import Category, CategoryType
 from app.schemas.transaction import (
     TransactionCreate,
@@ -44,6 +45,7 @@ from app.utils.locale_mapper import (
     transaction_type_mapper,
     transaction_status_mapper,
     payment_method_mapper,
+    account_type_mapper,
 )
 
 router = APIRouter()
@@ -77,6 +79,140 @@ def _row_is_empty(row: Tuple[Any, ...]) -> bool:
     return all(
         cell is None or (isinstance(cell, str) and not cell.strip())
         for cell in row
+    )
+
+
+
+
+def _normalize_lookup_key(value: str) -> str:
+    '''Remove acentos e normaliza o texto para facilitar comparacoes.'''
+    if not value:
+        return ''
+    normalized = unicodedata.normalize('NFKD', str(value))
+    base_text = ''.join(ch for ch in normalized if not unicodedata.combining(ch))
+    return base_text.strip().lower()
+
+
+def _ensure_account_for_import(
+    account_name: str,
+    normalized_name: str,
+    account_type_value: Optional[str],
+    default_account: Optional[Account],
+    account_lookup_by_name: Dict[str, Account],
+    account_lookup_by_id: Dict[str, Account],
+    current_user: User,
+    db: Session,
+    dry_run: bool,
+) -> Account:
+    """
+    Cria uma nova conta para o usuario quando o nome informado ainda nao existe.
+    """
+    display_name = (account_name or "").strip()
+    if not display_name or not normalized_name:
+        raise ValueError("Informe um valor valido na coluna 'conta_nome'.")
+
+    if normalized_name in account_lookup_by_name:
+        return account_lookup_by_name[normalized_name]
+
+    if not default_account:
+        raise ValueError(
+            "Selecione uma conta padrao no sistema para permitir a criacao de contas novas."
+        )
+
+    account_type = default_account.tipo or AccountType.CHECKING
+    if account_type_value:
+        try:
+            mapped_type = account_type_mapper.to_enum(account_type_value)
+        except ValueError:
+            raise ValueError(
+                "Tipo de conta invalido. Use dinheiro, conta_corrente, poupanca, "
+                "cartao_credito, investimento ou outros."
+            )
+        if mapped_type:
+            account_type = mapped_type
+
+    moeda = default_account.moeda or "BRL"
+
+    new_account = Account(
+        id=uuid.uuid4(),
+        nome=display_name[:100],
+        tipo=account_type,
+        user_id=current_user.id,
+        is_demo_data=current_user.is_demo,
+        moeda=moeda,
+        ativo=True,
+    )
+
+    if not dry_run:
+        db.add(new_account)
+
+    account_lookup_by_name[normalized_name] = new_account
+    account_lookup_by_id[str(new_account.id).strip().lower()] = new_account
+    return new_account
+
+
+def _resolve_account_from_row(
+    row_data: Dict[str, Any],
+    default_account: Optional[Account],
+    account_lookup_by_id: Dict[str, Account],
+    account_lookup_by_name: Dict[str, Account],
+    duplicated_account_names: Set[str],
+    current_user: User,
+    db: Session,
+    dry_run: bool,
+) -> Account:
+    '''Determina a conta da transacao usando o ID ou o nome informado na planilha.'''
+    conta_id_raw = (
+        row_data.get('conta_id')
+        or row_data.get('account_id')
+        or row_data.get('conta_destino_id')
+    )
+    if conta_id_raw:
+        conta_id_key = str(conta_id_raw).strip().lower()
+        account = account_lookup_by_id.get(conta_id_key)
+        if not account:
+            raise ValueError(
+                f"Conta com ID '{conta_id_raw}' nao encontrada para este usuario"
+            )
+        return account
+
+    conta_nome_raw = (
+        row_data.get('conta_nome')
+        or row_data.get('account_name')
+        or row_data.get('conta')
+    )
+    if conta_nome_raw:
+        normalized_name = _normalize_lookup_key(str(conta_nome_raw))
+        if normalized_name in duplicated_account_names:
+            raise ValueError(
+                f"Mais de uma conta utiliza o nome '{conta_nome_raw}'. "
+                "Informe o ID usando a coluna 'conta_id'."
+            )
+        account = account_lookup_by_name.get(normalized_name)
+        if not account:
+            account_type_value = (
+                row_data.get("conta_tipo")
+                or row_data.get("account_type")
+                or row_data.get("tipo_conta")
+            )
+            account = _ensure_account_for_import(
+                account_name=str(conta_nome_raw),
+                normalized_name=normalized_name,
+                account_type_value=account_type_value,
+                default_account=default_account,
+                account_lookup_by_name=account_lookup_by_name,
+                account_lookup_by_id=account_lookup_by_id,
+                current_user=current_user,
+                db=db,
+                dry_run=dry_run,
+            )
+        return account
+
+    if default_account:
+        return default_account
+
+    raise ValueError(
+        "Informe a conta de destino usando as colunas 'conta_nome' ou 'conta_id'."
     )
 
 
@@ -220,26 +356,28 @@ def _prepare_transaction_from_row(
     current_user: User,
     db: Session,
     dry_run: bool,
+    default_account: Account,
+    account_lookup_by_id: Dict[str, Account],
+    account_lookup_by_name: Dict[str, Account],
+    duplicated_account_names: Set[str],
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """
-    Converte uma linha da planilha em dados prontos para criar uma transa��ǜo.
-    """
+    """Converte uma linha da planilha em dados prontos para criar uma transacao."""
     tipo_raw = str(row_data.get("tipo") or "").strip()
     if not tipo_raw:
-        raise ValueError("Campo 'tipo' ������ obrigat������rio")
+        raise ValueError("Campo 'tipo' e obrigatorio")
 
     try:
         tipo = transaction_type_mapper.to_enum(tipo_raw)
     except ValueError:
-        raise ValueError("Tipo invǭlido. Use receita, despesa ou transferǦncia (ou income/expense/transfer).")
+        raise ValueError("Tipo invalido. Use receita, despesa ou transferencia (ou income/expense/transfer).")
 
     if tipo == TransactionType.TRANSFER:
-        raise ValueError("Importa������o de transfer������ncias n������o ������ suportada neste modelo")
+        raise ValueError("Importacao de transferencias nao e suportada neste modelo")
 
     data_lancamento = _parse_date_value(row_data.get("data_lancamento"), "data_lancamento", required=True)
     descricao = str(row_data.get("descricao") or "").strip()
     if not descricao:
-        raise ValueError("Campo 'descricao' ������ obrigat������rio")
+        raise ValueError("Campo 'descricao' e obrigatorio")
     descricao = descricao[:255]
 
     valor = _parse_decimal_value(row_data.get("valor"))
@@ -251,7 +389,7 @@ def _prepare_transaction_from_row(
     try:
         status = transaction_status_mapper.to_enum(status_raw)
     except ValueError:
-        raise ValueError("Status inv������lido. Use pendente, compensada ou conciliada (ou pending/cleared/reconciled)")
+        raise ValueError("Status invalido. Use pendente, compensada ou conciliada (ou pending/cleared/reconciled)")
 
     payment_method_raw = str(row_data.get("payment_method") or "").strip()
     payment_method = None
@@ -259,7 +397,7 @@ def _prepare_transaction_from_row(
         try:
             payment_method = payment_method_mapper.to_enum(payment_method_raw)
         except ValueError:
-            raise ValueError("M������todo de pagamento inv������lido")
+            raise ValueError("Metodo de pagamento invalido")
 
     categoria_nome = row_data.get("categoria_nome")
     category = None
@@ -275,6 +413,17 @@ def _prepare_transaction_from_row(
                 db=db,
                 dry_run=dry_run,
             )
+
+    account = _resolve_account_from_row(
+        row_data=row_data,
+        default_account=default_account,
+        account_lookup_by_id=account_lookup_by_id,
+        account_lookup_by_name=account_lookup_by_name,
+        duplicated_account_names=duplicated_account_names,
+        current_user=current_user,
+        db=db,
+        dry_run=dry_run,
+    )
 
     data_competencia = _parse_date_value(row_data.get("data_competencia"), "data_competencia")
     tags = _extract_tags(row_data.get("tags"))
@@ -293,6 +442,7 @@ def _prepare_transaction_from_row(
         "data_competencia": data_competencia,
         "tags": tags,
         "observacoes": observacoes,
+        "account_id": account.id,
     }
 
     preview_entry = {
@@ -304,12 +454,14 @@ def _prepare_transaction_from_row(
         "data_lancamento": data_lancamento.isoformat(),
         "categoria": category.nome if category else None,
         "status": status.value,
+        "conta": account.nome,
     }
 
     if payment_method:
         preview_entry["payment_method"] = payment_method.value
 
     return payload, preview_entry
+
 @router.get("/", response_model=TransactionListResponse)
 async def list_transactions(
     skip: int = 0,
@@ -474,16 +626,30 @@ async def import_transactions_from_template(
             detail="Importa��o est�� desabilitada neste ambiente",
         )
     
-    conta_destino = (
-        _account_query(db, current_user)
-        .filter(Account.id == account_id)
-        .first()
-    )
+    user_accounts = _account_query(db, current_user).all()
+    conta_destino = next((account for account in user_accounts if account.id == account_id), None)
     if not conta_destino:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Conta de destino n��o encontrada",
+            detail="Conta de destino nao encontrada",
         )
+    
+    account_lookup_by_id: Dict[str, Account] = {
+        str(account.id).strip().lower(): account
+        for account in user_accounts
+    }
+    account_lookup_by_name: Dict[str, Account] = {}
+    duplicated_account_names: Set[str] = set()
+    for account in user_accounts:
+        if not account.nome:
+            continue
+        normalized_name = _normalize_lookup_key(account.nome)
+        if not normalized_name:
+            continue
+        if normalized_name in account_lookup_by_name:
+            duplicated_account_names.add(normalized_name)
+            continue
+        account_lookup_by_name[normalized_name] = account
     
     filename = (file.filename or "").lower()
     if not filename.endswith(".xlsx"):
@@ -587,6 +753,10 @@ async def import_transactions_from_template(
                 current_user,
                 db,
                 dry_run,
+                conta_destino,
+                account_lookup_by_id,
+                account_lookup_by_name,
+                duplicated_account_names,
             )
         except ValueError as exc:
             errors.append(f"Linha {line_number}: {exc}")
@@ -603,7 +773,6 @@ async def import_transactions_from_template(
             for payload in rows_to_create:
                 transaction = Transaction(
                     **payload,
-                    account_id=account_id,
                     user_id=current_user.id,
                     is_demo_data=current_user.is_demo,
                 )

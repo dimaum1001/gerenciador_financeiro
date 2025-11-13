@@ -147,10 +147,11 @@ export default function ReportsPage() {
   const [categoryMonths, setCategoryMonths] = useState(3)
   const today = new Date()
   const [categoryYear, setCategoryYear] = useState(today.getFullYear())
+  const [cashFlowYear, setCashFlowYear] = useState(today.getFullYear())
   const [budgetYear, setBudgetYear] = useState(today.getFullYear())
   const [budgetMonth, setBudgetMonth] = useState(today.getMonth() + 1)
 
-  const { data: cashFlow, isLoading: cashFlowLoading, isError: cashFlowError } = useCashFlow(12)
+  const { data: cashFlow, isLoading: cashFlowLoading, isError: cashFlowError } = useCashFlow({ year: cashFlowYear })
   const categoryFilters = useMemo(() => {
     return categoryMode === 'range'
       ? { months: categoryMonths }
@@ -175,9 +176,18 @@ export default function ReportsPage() {
   const incomeData = useMemo(() => buildCategoryDataset(incomeCategories), [incomeCategories])
   const expenseTotal = useMemo(() => expenseData.reduce((sum, item) => sum + item.value, 0), [expenseData])
   const incomeTotal = useMemo(() => incomeData.reduce((sum, item) => sum + item.value, 0), [incomeData])
-  const categoryYearOptions = useMemo(() => {
+  const yearRangeOptions = useMemo(() => {
     const currentYear = today.getFullYear()
     return Array.from({ length: 6 }, (_, index) => currentYear - index)
+  }, [today])
+  const categoryYearOptions = yearRangeOptions
+
+  const cashFlowYearOptions = useMemo(() => {
+    const currentYear = today.getFullYear()
+    const yearsBefore = 5
+    const yearsAfter = 2
+    const startYear = currentYear - yearsBefore
+    return Array.from({ length: yearsBefore + yearsAfter + 1 }, (_, index) => startYear + index).reverse()
   }, [today])
 
   const accountsData = useMemo(() => {
@@ -223,9 +233,6 @@ export default function ReportsPage() {
     return monthLabel ? `${monthLabel} de ${budgetYear}` : `${budgetYear}`
   }, [budgetMonthOptions, budgetMonth, budgetYear])
 
-  const selectedCategories = categoryTab === 'despesa' ? expenseData : incomeData
-
-
   return (
     <div className="space-y-6">
       <div>
@@ -235,9 +242,23 @@ export default function ReportsPage() {
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle>Fluxo de caixa (12 meses)</CardTitle>
-            <CardDescription>Receitas, despesas e saldo acumulado.</CardDescription>
+          <CardHeader className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <CardTitle>Fluxo de caixa</CardTitle>
+              <CardDescription>{`Receitas, despesas e saldo de ${cashFlowYear}`}</CardDescription>
+            </div>
+            <Select value={String(cashFlowYear)} onValueChange={(value) => setCashFlowYear(Number(value))}>
+              <SelectTrigger className="w-[140px]">
+                <SelectValue placeholder="Ano" />
+              </SelectTrigger>
+              <SelectContent>
+                {cashFlowYearOptions.map((year) => (
+                  <SelectItem key={year} value={String(year)}>
+                    {year}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </CardHeader>
           <CardContent>
             <SectionState loading={cashFlowLoading} error={cashFlowError} emptyMessage={cashFlowData.length ? null : 'Sem dados de fluxo para o periodo.'}>

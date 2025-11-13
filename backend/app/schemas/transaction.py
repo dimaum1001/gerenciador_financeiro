@@ -308,7 +308,8 @@ class TransactionImportResult(BaseModel):
                         "data": "2024-01-15",
                         "descricao": "Supermercado",
                         "valor": 150.50,
-                        "tipo": "expense"
+                        "tipo": "expense",
+                        "conta": "Cartao de Credito"
                     }
                 ]
             }

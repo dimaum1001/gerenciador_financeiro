@@ -209,13 +209,34 @@ export const useDashboardSummary = (options = {}) => {
   })
 }
 
-export const useCashFlow = (months = 6, options = {}) => {
+export const useCashFlow = (input = 6, options = {}) => {
   const { api } = useApi()
-  
+
+  let months = 6
+  let year
+
+  if (typeof input === 'number') {
+    months = input
+  } else if (typeof input === 'object' && input !== null) {
+    if (typeof input.months === 'number') {
+      months = input.months
+    }
+    if (typeof input.year === 'number') {
+      year = input.year
+    }
+  }
+
+  const params = new URLSearchParams()
+  if (year) {
+    params.set('year', String(year))
+  } else {
+    params.set('months', String(months))
+  }
+
   return useQuery({
-    queryKey: ['dashboard', 'cash-flow', months],
+    queryKey: ['dashboard', 'cash-flow', year ?? null, year ? null : months],
     queryFn: async () => {
-      const response = await api.get(`/dashboard/cash-flow?months=${months}`)
+      const response = await api.get(`/dashboard/cash-flow?${params.toString()}`)
       return response.data
     },
     staleTime: 5 * 60 * 1000,

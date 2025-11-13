@@ -25,15 +25,18 @@ import {
   Loader2
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/formatters'
+import { loadNotificationPreferences, saveNotificationPreferences } from '@/lib/notifications'
 import { useApi } from '@/contexts/ApiContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { useTheme } from '@/components/theme-provider'
+import { useToast } from '@/hooks/use-toast'
 
 export default function SettingsPage() {
   const { user } = useAuth()
   const { theme, setTheme } = useTheme()
   const { api } = useApi()
   const queryClient = useQueryClient()
+  const { toast } = useToast()
   const [showPassword, setShowPassword] = useState(false)
   const [importAccount, setImportAccount] = useState('')
   const [importFile, setImportFile] = useState(null)
@@ -53,14 +56,7 @@ export default function SettingsPage() {
     formato_data: 'DD/MM/YYYY'
   })
 
-  const [notifications, setNotifications] = useState({
-    email_transacoes: true,
-    email_orcamentos: true,
-    email_vencimentos: true,
-    push_transacoes: false,
-    push_orcamentos: true,
-    push_vencimentos: true
-  })
+  const [notifications, setNotifications] = useState(() => loadNotificationPreferences())
 
   const [security, setSecurity] = useState({
     senha_atual: '',
@@ -132,7 +128,7 @@ export default function SettingsPage() {
     setImportResult(null)
     
     if (!importAccount) {
-      setImportError('Selecione a conta que receberá as transações importadas.')
+      setImportError('Selecione a conta padrão que será usada nas linhas sem "conta_nome".')
       return
     }
     
@@ -167,7 +163,6 @@ export default function SettingsPage() {
   }
 
   const handleImportSubmit = () => executeImport()
-  const handleConfirmImport = () => executeImport({ forceDryRun: false })
 
   const formatPreviewCurrency = (value, currencyCode = 'BRL') => {
     try {
@@ -192,8 +187,11 @@ export default function SettingsPage() {
   }
 
   const handleNotificationsSave = () => {
-    // Implementar salvamento das notificações
-    console.log('Salvando notificações:', notifications)
+    saveNotificationPreferences(notifications)
+    toast({
+      title: 'Preferências atualizadas',
+      description: 'Suas notificações foram sincronizadas.',
+    })
   }
 
   return (
@@ -594,6 +592,12 @@ export default function SettingsPage() {
                         <p className="text-xs text-muted-foreground">
                           Use valores em portugues: tipo = receita ou despesa - status = pendente, compensada ou conciliada - payment_method = dinheiro, pix, cartao_debito, cartao_credito, boleto, transferencia, cheque ou outros.
                         </p>
+                        <p className="text-xs text-muted-foreground">
+                          Para importar varias contas no mesmo arquivo utilize a coluna <span className="font-mono text-[11px]">conta_nome</span> (ou <span className="font-mono text-[11px]">conta_id</span>). Quando a linha nao informar esse campo usaremos a conta selecionada abaixo como padrao.
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Opcionalmente preencha <span className="font-mono text-[11px]">conta_tipo</span> com dinheiro, conta_corrente, poupanca, cartao_credito, investimento ou outros. Quando vazio usamos o mesmo tipo da conta padrao.
+                        </p>
                       </div>
                       <Button variant="ghost" asChild>
                         <a
@@ -609,7 +613,7 @@ export default function SettingsPage() {
 
                     <div className="grid gap-4 md:grid-cols-2">
                       <div className="space-y-2">
-                        <Label>Conta de destino</Label>
+                        <Label>Conta padrao (fallback)</Label>
                         <Select
                           value={importAccount}
                           onValueChange={setImportAccount}
@@ -621,7 +625,7 @@ export default function SettingsPage() {
                                 accountsQuery.isLoading
                                   ? 'Carregando contas...'
                                   : hasAccounts
-                                    ? 'Selecione a conta'
+                                    ? 'Selecione a conta padrao'
                                     : 'Nenhuma conta disponível'
                               }
                             />
@@ -642,6 +646,11 @@ export default function SettingsPage() {
                         {!accountsQuery.isLoading && !hasAccounts && (
                           <p className="text-xs text-muted-foreground">
                             Cadastre uma conta antes de importar transações.
+                          </p>
+                        )}
+                        {hasAccounts && importAccount && (
+                          <p className="text-xs text-muted-foreground">
+                            Linhas sem <span className="font-mono text-[11px]">conta_nome</span> (e as novas contas sem <span className="font-mono text-[11px]">conta_tipo</span>) usam esta conta como referencia de tipo e moeda.
                           </p>
                         )}
                       </div>
@@ -729,7 +738,7 @@ export default function SettingsPage() {
                             </div>
                             {!lastImportDryRun && (
                               <p className="mt-2 text-xs text-muted-foreground">
-                                As transações válidas foram adicionadas à conta selecionada.
+                                Transações com a coluna <span className="font-mono text-[11px]">conta_nome</span> foram enviadas para as contas indicadas (criadas automaticamente quando necessário); as demais utilizaram a conta padrão selecionada.
                               </p>
                             )}
                           </AlertDescription>
@@ -747,6 +756,7 @@ export default function SettingsPage() {
                                     <th className="px-3 py-2 text-left text-xs font-medium uppercase text-muted-foreground">Linha</th>
                                     <th className="px-3 py-2 text-left text-xs font-medium uppercase text-muted-foreground">Data</th>
                                     <th className="px-3 py-2 text-left text-xs font-medium uppercase text-muted-foreground">Descrição</th>
+                                    <th className="px-3 py-2 text-left text-xs font-medium uppercase text-muted-foreground">Conta</th>
                                     <th className="px-3 py-2 text-left text-xs font-medium uppercase text-muted-foreground">Tipo</th>
                                     <th className="px-3 py-2 text-left text-xs font-medium uppercase text-muted-foreground">Valor</th>
                                     <th className="px-3 py-2 text-left text-xs font-medium uppercase text-muted-foreground">Categoria</th>
@@ -759,6 +769,7 @@ export default function SettingsPage() {
                                       <td className="px-3 py-2 text-xs text-muted-foreground">{item.linha}</td>
                                       <td className="px-3 py-2">{item.data_lancamento}</td>
                                       <td className="px-3 py-2">{item.descricao}</td>
+                                      <td className="px-3 py-2">{item.conta || '--'}</td>
                                       <td className="px-3 py-2 capitalize">{item.tipo}</td>
                                       <td className="px-3 py-2">
                                         {formatPreviewCurrency(item.valor, item.moeda)}

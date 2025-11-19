@@ -45,6 +45,38 @@ pwd_context = CryptContext(
 logger = structlog.get_logger(__name__)
 
 
+def _hash_with_raw_bcrypt(password: str) -> str:
+    """
+    Fallback manual usando bcrypt direto.
+
+    Passlib tem apresentado erros falsos de 72 bytes no Render. Para contornar,
+    aplicamos diretamente o backend bcrypt (se instalado) e retornamos o hash
+    padr��o ``$2b$``.
+    """
+    if pybcrypt is None:
+        raise RuntimeError("bcrypt backend not available")
+
+    password_bytes = password.encode("utf-8")
+    truncated = False
+    if len(password_bytes) > 72:
+        password_bytes = password_bytes[:72]
+        truncated = True
+
+    handler = pwd_context.handler("bcrypt")
+    rounds = getattr(handler, "default_rounds", 12)
+    salt = pybcrypt.gensalt(rounds)
+    hashed = pybcrypt.hashpw(password_bytes, salt).decode("utf-8")
+
+    if truncated:
+        logger.info(
+            "Password truncated for raw bcrypt hashing",
+            original_length=len(password.encode("utf-8")),
+            truncated_length=len(password_bytes),
+        )
+
+    return hashed
+
+
 def create_access_token(
     subject: Union[str, uuid.UUID], 
     expires_delta: Optional[timedelta] = None
@@ -229,7 +261,6 @@ def get_password_hash(password: str) -> str:
         return pwd_context.hash(password)
     except ValueError as exc:
         # Render tem relatado erro de 72 bytes ao usar bcrypt_sha256 em algumas builds.
-        # Fazemos fallback para o esquema bcrypt puro (que jǭ tolera e trunca automaticamente).
         password_len = len(password.encode("utf-8"))
         logger.warning(
             "Password hashing fallback to bcrypt",
@@ -237,8 +268,8 @@ def get_password_hash(password: str) -> str:
             password_length=password_len,
         )
         try:
-            return pwd_context.hash(password, scheme="bcrypt")
-        except ValueError as fallback_exc:  # pragma: no cover - falha irrecuper��vel
+            return _hash_with_raw_bcrypt(password)
+        except Exception as fallback_exc:  # pragma: no cover - falha irrecuper��vel
             logger.error(
                 "Password hashing fallback failed",
                 error=str(fallback_exc),

@@ -225,7 +225,26 @@ def get_password_hash(password: str) -> str:
     Returns:
         Hash da senha
     """
-    return pwd_context.hash(password)
+    try:
+        return pwd_context.hash(password)
+    except ValueError as exc:
+        # Render tem relatado erro de 72 bytes ao usar bcrypt_sha256 em algumas builds.
+        # Fazemos fallback para o esquema bcrypt puro (que jǭ tolera e trunca automaticamente).
+        password_len = len(password.encode("utf-8"))
+        logger.warning(
+            "Password hashing fallback to bcrypt",
+            error=str(exc),
+            password_length=password_len,
+        )
+        try:
+            return pwd_context.hash(password, scheme="bcrypt")
+        except ValueError as fallback_exc:  # pragma: no cover - falha irrecuper��vel
+            logger.error(
+                "Password hashing fallback failed",
+                error=str(fallback_exc),
+                password_length=password_len,
+            )
+            raise
 
 
 def generate_password_reset_token(email: str) -> str:

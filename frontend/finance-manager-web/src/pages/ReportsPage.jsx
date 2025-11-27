@@ -121,6 +121,21 @@ function CategoryList({ data, total }) {
   )
 }
 
+function CategoryLegend({ data }) {
+  if (!data?.length) return null
+
+  return (
+    <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 px-2 text-xs md:text-sm">
+      {data.map((item) => (
+        <div key={item.key} className="flex items-center gap-2">
+          <span className="inline-flex h-3 w-3 rounded-full" style={{ backgroundColor: item.color }} />
+          <span className="text-foreground/80">{item.name}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function SectionState({ loading, error, emptyMessage, children }) {
   if (loading) {
     return (
@@ -366,9 +381,9 @@ export default function ReportsPage() {
                           ))}
                         </Pie>
                         <Tooltip content={<CategoryPieTooltip />} />
-                        <Legend />
                       </PieChart>
                     </ResponsiveContainer>
+                    <CategoryLegend data={expenseData} />
                   </div>
                   <div className="flex-1">
                     <CategoryList data={expenseData} total={expenseTotal} />
@@ -392,9 +407,9 @@ export default function ReportsPage() {
                           ))}
                         </Pie>
                         <Tooltip content={<CategoryPieTooltip />} />
-                        <Legend />
                       </PieChart>
                     </ResponsiveContainer>
+                    <CategoryLegend data={incomeData} />
                   </div>
                   <div className="flex-1">
                     <CategoryList data={incomeData} total={incomeTotal} />

@@ -36,6 +36,13 @@ const typeFilterOptions = [
 const transactionTypeLabels = Object.fromEntries(transactionTypeOptions.map((option) => [option.value, option.label]))
 const statusLabelMap = Object.fromEntries(transactionStatusOptions.map((option) => [option.value, option.label]))
 
+const parseLocalDateFromISO = (value) => {
+  if (!value) return null
+  const [year, month, day] = value.split('-').map(Number)
+  if ([year, month, day].some((part) => Number.isNaN(part))) return null
+  return new Date(year, month - 1, day)
+}
+
 function AutocompleteSelect({
   options = [],
   value,
@@ -112,7 +119,7 @@ function TransactionForm({ initialData, accounts, categories, onSubmit, onCancel
     valor: initialData?.valor != null ? Number(initialData.valor).toString() : '',
     moeda: initialData?.moeda ?? 'BRL',
     tipo: normalizeTransactionType(initialData?.tipo_portugues ?? initialData?.tipo ?? 'despesa'),
-    data_lancamento: initialData?.data_lancamento ?? new Date().toISOString().split('T')[0],
+    data_lancamento: initialData?.data_lancamento ?? format(new Date(), 'yyyy-MM-dd'),
     conta_id: getField(initialData, 'conta_id', 'account_id') ?? (accounts[0]?.id ?? ''),
     categoria_id: getField(initialData, 'categoria_id', 'category_id') ?? '',
     status: normalizeTransactionStatus(initialData?.status) ?? 'pendente',
@@ -399,7 +406,15 @@ export default function TransactionsPage() {
   const categoriesMap = useMemo(() => Object.fromEntries(categories.map((category) => [category.id, category.nome])), [categories])
 
   const sortedTransactions = useMemo(() => {
-    return [...transactions].sort((a, b) => new Date(b.data_lancamento) - new Date(a.data_lancamento))
+    return [...transactions].sort((a, b) => {
+      const dateA = parseLocalDateFromISO(a.data_lancamento)
+      const dateB = parseLocalDateFromISO(b.data_lancamento)
+
+      if (dateA && dateB) return dateB - dateA
+      if (dateB) return 1
+      if (dateA) return -1
+      return 0
+    })
   }, [transactions])
 
   const filteredTransactions = useMemo(() => {
@@ -451,7 +466,8 @@ export default function TransactionsPage() {
 
     const byDay = new Map()
     filteredTransactions.forEach((tx) => {
-      const currentDate = new Date(tx.data_lancamento)
+      const currentDate = parseLocalDateFromISO(tx.data_lancamento)
+      if (!currentDate) return
       const label = format(currentDate, 'dd/MM', { locale: ptBR })
       const entry = byDay.get(label) ?? { date: currentDate, income: 0, expense: 0, total: 0 }
 
@@ -651,9 +667,10 @@ export default function TransactionsPage() {
                     const valorFormatado = tipoNormalizado === 'despesa' ? formatCurrency(valorNumerico * -1) : formatCurrency(valorNumerico)
                     const contaId = getTransactionContaId(transaction)
                     const categoriaId = getTransactionCategoriaId(transaction)
+                    const lancamentoDate = parseLocalDateFromISO(transaction.data_lancamento)
                     return (
                       <tr key={transaction.id} className="border-b last:border-transparent">
-                        <td className="py-2">{format(new Date(transaction.data_lancamento), 'dd/MM/yyyy')}</td>
+                        <td className="py-2">{lancamentoDate ? format(lancamentoDate, 'dd/MM/yyyy') : transaction.data_lancamento}</td>
                         <td className="py-2">{transaction.descricao}</td>
                         <td className="py-2">{accountsMap[contaId] ?? '--'}</td>
                         <td className="py-2">{categoriaId ? categoriesMap[categoriaId] ?? '--' : '--'}</td>

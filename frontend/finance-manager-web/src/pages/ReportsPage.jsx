@@ -193,7 +193,10 @@ export default function ReportsPage() {
   const incomeTotal = useMemo(() => incomeData.reduce((sum, item) => sum + item.value, 0), [incomeData])
   const yearRangeOptions = useMemo(() => {
     const currentYear = today.getFullYear()
-    return Array.from({ length: 6 }, (_, index) => currentYear - index)
+    const yearsBefore = 5
+    const yearsAfter = 2
+    const startYear = currentYear - yearsBefore
+    return Array.from({ length: yearsBefore + yearsAfter + 1 }, (_, index) => startYear + index).reverse()
   }, [today])
   const categoryYearOptions = yearRangeOptions
 

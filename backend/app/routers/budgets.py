@@ -1,6 +1,7 @@
 from decimal import Decimal
 from typing import Optional
 from datetime import datetime, date
+import calendar
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, desc, func, extract
@@ -11,6 +12,7 @@ from app.models.budget import Budget
 from app.models.category import Category
 from app.models.transaction import Transaction, TransactionType
 from app.schemas.budget import BudgetCreate, BudgetUpdate, BudgetResponse, BudgetListResponse
+from app.utils.pagination import paginate_query
 
 router = APIRouter()
 
@@ -35,6 +37,7 @@ def _transaction_query(db: Session, current_user: User):
         Transaction.is_demo_data.is_(current_user.is_demo),
     )
 
+@router.get("", include_in_schema=False, response_model=BudgetListResponse)
 @router.get("/", response_model=BudgetListResponse)
 async def list_budgets(
     skip: int = 0,
@@ -47,9 +50,7 @@ async def list_budgets(
     db: Session = Depends(get_db)
 ):
     """Listar orçamentos do usuário com filtros opcionais"""
-    query = _budget_query(db, current_user).options(
-        joinedload(Budget.category)
-    )
+    query = _budget_query(db, current_user)
     
     # Aplicar filtros
     if categoria_id:
@@ -66,33 +67,54 @@ async def list_budgets(
         # Isso seria melhor implementado como uma view ou computed field
         pass
     
-    # Contar total
-    total = query.count()
-    
-    # Aplicar paginação e ordenação
-    budgets = query.order_by(desc(Budget.ano), desc(Budget.mes), Budget.category_id).offset(skip).limit(limit).all()
+    budgets, total = paginate_query(
+        query.order_by(desc(Budget.ano), desc(Budget.mes), Budget.category_id),
+        skip=skip,
+        limit=limit,
+    )
     
     # Atualizar valor realizado dinamicamente (sem persistir)
-    for budget in budgets:
-        gasto_realizado = (
+    if budgets:
+        category_ids = {budget.category_id for budget in budgets}
+
+        period_starts = [date(budget.ano, budget.mes, 1) for budget in budgets]
+        period_ends = [
+            date(budget.ano, budget.mes, calendar.monthrange(budget.ano, budget.mes)[1])
+            for budget in budgets
+        ]
+        min_period_start = min(period_starts)
+        max_period_end = max(period_ends)
+
+        spent_rows = (
             _transaction_query(db, current_user)
-            .with_entities(func.coalesce(func.sum(Transaction.valor), 0))
-            .filter(
-                and_(
-                    Transaction.category_id == budget.category_id,
-                    Transaction.tipo == TransactionType.EXPENSE,
-                    extract('year', Transaction.data_lancamento) == budget.ano,
-                    extract('month', Transaction.data_lancamento) == budget.mes,
-                )
+            .with_entities(
+                Transaction.category_id.label("category_id"),
+                extract("year", Transaction.data_lancamento).label("ano"),
+                extract("month", Transaction.data_lancamento).label("mes"),
+                func.coalesce(func.sum(Transaction.valor), 0).label("total"),
             )
-            .scalar()
+            .filter(
+                Transaction.tipo == TransactionType.EXPENSE,
+                Transaction.category_id.in_(category_ids),
+                Transaction.data_lancamento >= min_period_start,
+                Transaction.data_lancamento <= max_period_end,
+            )
+            .group_by(Transaction.category_id, "ano", "mes")
+            .all()
         )
 
-        realizado = Decimal(gasto_realizado or 0)
-        if realizado < 0:
-            realizado = realizado.copy_abs()
+        spent_by_period = {}
+        for row in spent_rows:
+            try:
+                spent_by_period[(row.category_id, int(row.ano), int(row.mes))] = Decimal(row.total or 0)
+            except (TypeError, ValueError):
+                continue
 
-        budget.valor_realizado = realizado
+        for budget in budgets:
+            realized = spent_by_period.get((budget.category_id, budget.ano, budget.mes), Decimal("0"))
+            if realized < 0:
+                realized = realized.copy_abs()
+            budget.valor_realizado = realized
     
     return BudgetListResponse(
         budgets=budgets,
@@ -101,6 +123,7 @@ async def list_budgets(
         limit=limit
     )
 
+@router.post("", include_in_schema=False, response_model=BudgetResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=BudgetResponse, status_code=status.HTTP_201_CREATED)
 async def create_budget(
     budget_data: BudgetCreate,

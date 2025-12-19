@@ -141,7 +141,7 @@ export default function BudgetsPage() {
   const categoriesQuery = useQuery({
     queryKey: ['categories'],
     queryFn: async () => {
-      const response = await api.get('/categories', { params: { limit: 500 } })
+      const response = await api.get('/categories', { params: { limit: 500, parent_id: '' } })
       return response.data.categories ?? []
     },
   })

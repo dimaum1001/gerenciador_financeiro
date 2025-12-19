@@ -4,6 +4,13 @@ import { useApi } from './ApiContext'
 
 const AuthContext = createContext({})
 
+const formatLocalDateToISO = (date) => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -19,6 +26,7 @@ export function AuthProvider({ children }) {
       api.get('/auth/me')
         .then(response => {
           setUser(response.data)
+          preloadUserData()
         })
         .catch(() => {
           // Token invǭlido, remover
@@ -33,6 +41,87 @@ export function AuthProvider({ children }) {
     }
   }, [api])
 
+  const preloadUserData = () => {
+    const now = new Date()
+    const currentYear = now.getFullYear()
+    const currentMonth = now.getMonth() + 1
+
+    const startDateIso = formatLocalDateToISO(new Date(currentYear, currentMonth - 1, 1))
+    const endDateIso = formatLocalDateToISO(new Date(currentYear, currentMonth, 0))
+
+    const immediatePrefetches = [
+      queryClient.prefetchQuery({
+        queryKey: ['accounts'],
+        queryFn: async () => {
+          const response = await api.get('/accounts', { params: { limit: 500 } })
+          return response.data.accounts ?? []
+        },
+      }),
+      queryClient.prefetchQuery({
+        queryKey: ['accounts', 'import'],
+        queryFn: async () => {
+          const response = await api.get('/accounts', { params: { limit: 500, skip: 0 } })
+          return response.data.accounts ?? []
+        },
+      }),
+      queryClient.prefetchQuery({
+        queryKey: ['categories'],
+        queryFn: async () => {
+          const response = await api.get('/categories', { params: { limit: 500, parent_id: '' } })
+          return response.data.categories ?? []
+        },
+      }),
+      queryClient.prefetchQuery({
+        queryKey: ['budgets'],
+        queryFn: async () => {
+          const response = await api.get('/budgets', { params: { limit: 500 } })
+          return response.data.budgets ?? []
+        },
+      }),
+      queryClient.prefetchQuery({
+        queryKey: ['dashboard', 'summary', currentYear, currentMonth],
+        queryFn: async () => {
+          const response = await api.get('/dashboard/summary', { params: { year: currentYear, month: currentMonth } })
+          return response.data
+        },
+      }),
+      queryClient.prefetchQuery({
+        queryKey: ['dashboard', 'recent-transactions', 5],
+        queryFn: async () => {
+          const response = await api.get('/dashboard/recent-transactions', { params: { limit: 5 } })
+          return response.data ?? []
+        },
+      }),
+      queryClient.prefetchQuery({
+        queryKey: ['dashboard', 'budget-status', currentYear, currentMonth],
+        queryFn: async () => {
+          const response = await api.get('/dashboard/budget-status', { params: { year: currentYear, month: currentMonth } })
+          return response.data
+        },
+      }),
+    ]
+
+    Promise.allSettled(immediatePrefetches)
+
+    setTimeout(() => {
+      queryClient
+        .prefetchQuery({
+          queryKey: ['transactions', startDateIso, endDateIso],
+          queryFn: async () => {
+            const response = await api.get('/transactions', {
+              params: {
+                limit: 1000,
+                data_inicio: startDateIso,
+                data_fim: endDateIso,
+              },
+            })
+            return response.data.transactions ?? []
+          },
+        })
+        .catch(() => {})
+    }, 300)
+  }
+
   const login = async (email, senha) => {
     try {
       const response = await api.post('/auth/login', { email, senha })
@@ -44,6 +133,7 @@ export function AuthProvider({ children }) {
       queryClient.clear()
 
       setUser(userData)
+      preloadUserData()
       return { success: true }
     } catch (error) {
       console.error('Erro ao fazer login:', error)

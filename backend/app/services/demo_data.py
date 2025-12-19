@@ -154,6 +154,7 @@ def ensure_demo_user(session: Session) -> None:
                 nome=name,
                 tipo=CategoryType.EXPENSE,
                 parent_id=alimentos.id,
+                is_demo_data=True,
             )
         )
 
@@ -163,6 +164,7 @@ def ensure_demo_user(session: Session) -> None:
         tipo=CategoryType.EXPENSE,
         descricao="Custos da casa",
         cor="#f97316",
+        is_demo_data=True,
     )
     session.add(moradia)
     session.commit()
@@ -174,18 +176,21 @@ def ensure_demo_user(session: Session) -> None:
                 nome="Aluguel",
                 tipo=CategoryType.EXPENSE,
                 parent_id=moradia.id,
+                is_demo_data=True,
             ),
             Category(
                 user_id=demo_user.id,
                 nome="Energia",
                 tipo=CategoryType.EXPENSE,
                 parent_id=moradia.id,
+                is_demo_data=True,
             ),
             Category(
                 user_id=demo_user.id,
                 nome="Internet",
                 tipo=CategoryType.EXPENSE,
                 parent_id=moradia.id,
+                is_demo_data=True,
             ),
         ]
     )

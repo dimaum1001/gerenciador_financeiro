@@ -19,6 +19,7 @@ from app.schemas.user import (
 router = APIRouter()
 
 
+@router.get("", include_in_schema=False, response_model=list[UserResponse])
 @router.get("/", response_model=list[UserResponse])
 def list_users(
     current_user: User = Depends(get_current_user)
@@ -29,6 +30,7 @@ def list_users(
     return [UserResponse.model_validate(current_user)]
 
 
+@router.post("", include_in_schema=False, response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_user(
     user_data: UserCreate,

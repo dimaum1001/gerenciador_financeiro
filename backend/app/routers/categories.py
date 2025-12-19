@@ -1,4 +1,5 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Tuple
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
@@ -18,6 +19,79 @@ def _category_query(db: Session, current_user: User):
         Category.is_demo_data.is_(current_user.is_demo),
     )
 
+
+def _build_category_meta(categories: List[Category]) -> Dict[UUID, Tuple[str, int, bool, str]]:
+    categories_by_id = {category.id: category for category in categories}
+    children_count: Dict[UUID, int] = {}
+
+    for category in categories:
+        if category.parent_id:
+            children_count[category.parent_id] = children_count.get(category.parent_id, 0) + 1
+
+    full_name_cache: Dict[UUID, str] = {}
+    level_cache: Dict[UUID, int] = {}
+    visiting: set[UUID] = set()
+
+    def compute_full_name(category_id: UUID) -> str:
+        cached = full_name_cache.get(category_id)
+        if cached is not None:
+            return cached
+
+        category = categories_by_id.get(category_id)
+        if not category:
+            return ""
+
+        if category_id in visiting:
+            return category.nome
+
+        visiting.add(category_id)
+        if category.parent_id and category.parent_id in categories_by_id:
+            parent_name = compute_full_name(category.parent_id)
+            full_name = f"{parent_name} > {category.nome}" if parent_name else category.nome
+        else:
+            full_name = category.nome
+        visiting.discard(category_id)
+
+        full_name_cache[category_id] = full_name
+        return full_name
+
+    def compute_level(category_id: UUID) -> int:
+        cached = level_cache.get(category_id)
+        if cached is not None:
+            return cached
+
+        category = categories_by_id.get(category_id)
+        if not category:
+            return 0
+
+        if category_id in visiting:
+            return 0
+
+        visiting.add(category_id)
+        if category.parent_id and category.parent_id in categories_by_id:
+            level = compute_level(category.parent_id) + 1
+        else:
+            level = 0
+        visiting.discard(category_id)
+
+        level_cache[category_id] = level
+        return level
+
+    def tipo_display(tipo: CategoryType) -> str:
+        return "Receita" if tipo == CategoryType.INCOME else "Despesa"
+
+    meta: Dict[UUID, Tuple[str, int, bool, str]] = {}
+    for category in categories:
+        meta[category.id] = (
+            compute_full_name(category.id),
+            compute_level(category.id),
+            children_count.get(category.id, 0) > 0,
+            tipo_display(category.tipo),
+        )
+
+    return meta
+
+@router.get("", include_in_schema=False, response_model=CategoryListResponse)
 @router.get("/", response_model=CategoryListResponse)
 async def list_categories(
     skip: int = 0,
@@ -30,9 +104,12 @@ async def list_categories(
     db: Session = Depends(get_db)
 ):
     """Listar categorias do usuário com filtros opcionais"""
-    query = _category_query(db, current_user)
-    
-    # Aplicar filtros
+    categories = _category_query(db, current_user).all()
+    meta_by_id = _build_category_meta(categories)
+
+    # Aplicar filtros em memória para reduzir round-trips ao banco (DB remoto)
+    filtered = categories
+
     if tipo:
         try:
             tipo_enum = category_type_mapper.to_enum(tipo)
@@ -41,38 +118,75 @@ async def list_categories(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Tipo de categoria inválido",
             )
-        query = query.filter(Category.tipo == tipo_enum)
-    
-    if parent_id:
-        query = query.filter(Category.parent_id == parent_id)
-    elif parent_id is None:
+        filtered = [category for category in filtered if category.tipo == tipo_enum]
+
+    if parent_id is None:
         # Se não especificado, mostrar apenas categorias raiz
-        query = query.filter(Category.parent_id.is_(None))
-    
+        filtered = [category for category in filtered if category.parent_id is None]
+    elif parent_id != "":
+        try:
+            parent_uuid = UUID(parent_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="parent_id inválido",
+            )
+        filtered = [category for category in filtered if category.parent_id == parent_uuid]
+
     if ativo is not None:
-        query = query.filter(Category.ativo == ativo)
-    
+        filtered = [category for category in filtered if category.ativo == ativo]
+
     if search:
-        query = query.filter(
-            or_(
-                Category.nome.ilike(f"%{search}%"),
-                Category.descricao.ilike(f"%{search}%")
+        needle = search.casefold()
+
+        def match(category: Category) -> bool:
+            return (
+                needle in (category.nome or "").casefold()
+                or needle in (category.descricao or "").casefold()
+            )
+
+        filtered = [category for category in filtered if match(category)]
+
+    filtered.sort(key=lambda category: (category.nome or "").casefold())
+    total = len(filtered)
+
+    paginated = filtered[skip : skip + limit]
+    response_items: List[CategoryResponse] = []
+    for category in paginated:
+        nome_completo, nivel, is_parent, tipo_display = meta_by_id.get(
+            category.id,
+            (category.nome, 0, False, "Receita" if category.tipo == CategoryType.INCOME else "Despesa"),
+        )
+        response_items.append(
+            CategoryResponse(
+                id=category.id,
+                user_id=category.user_id,
+                nome=category.nome,
+                tipo=category.tipo,
+                parent_id=category.parent_id,
+                cor=category.cor,
+                icone=category.icone,
+                descricao=category.descricao,
+                ativo=category.ativo,
+                incluir_relatorios=category.incluir_relatorios,
+                meta_mensal=category.meta_mensal,
+                nome_completo=nome_completo,
+                nivel=nivel,
+                is_parent=is_parent,
+                tipo_display=tipo_display,
+                criado_em=category.criado_em,
+                atualizado_em=category.atualizado_em,
             )
         )
-    
-    # Contar total
-    total = query.count()
-    
-    # Aplicar paginação e ordenação
-    categories = query.order_by(Category.nome).offset(skip).limit(limit).all()
-    
+
     return CategoryListResponse(
-        categories=categories,
+        categories=response_items,
         total=total,
         skip=skip,
-        limit=limit
+        limit=limit,
     )
 
+@router.post("", include_in_schema=False, response_model=CategoryResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=CategoryResponse, status_code=status.HTTP_201_CREATED)
 async def create_category(
     category_data: CategoryCreate,

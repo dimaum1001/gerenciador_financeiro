@@ -14,6 +14,7 @@ from app.schemas.account import (
     AccountUpdate,
 )
 from app.utils.locale_mapper import account_type_mapper
+from app.utils.pagination import paginate_query
 
 router = APIRouter()
 
@@ -25,6 +26,7 @@ def _account_query(db: Session, current_user: User):
     )
 
 
+@router.get("", include_in_schema=False, response_model=AccountListResponse)
 @router.get("/", response_model=AccountListResponse)
 async def list_accounts(
     skip: int = 0,
@@ -62,12 +64,11 @@ async def list_accounts(
             )
         )
 
-    # Contar total
-    total = query.count()
-
     # Aplicar paginação e ordenação
-    accounts = (
-        query.order_by(desc(Account.atualizado_em)).offset(skip).limit(limit).all()
+    accounts, total = paginate_query(
+        query.order_by(desc(Account.atualizado_em)),
+        skip=skip,
+        limit=limit,
     )
 
     return AccountListResponse(
@@ -78,6 +79,7 @@ async def list_accounts(
     )
 
 
+@router.post("", include_in_schema=False, response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
 async def create_account(
     account_data: AccountCreate,
@@ -149,15 +151,15 @@ async def update_account(
     # Verificar nome duplicado (se alterado)
     if account_data.nome and account_data.nome != account.nome:
         existing = (
-        _account_query(db, current_user)
-        .filter(
-            and_(
-                Account.nome == account_data.nome,
-                Account.id != account_id,
+            _account_query(db, current_user)
+            .filter(
+                and_(
+                    Account.nome == account_data.nome,
+                    Account.id != account_id,
+                )
             )
+            .first()
         )
-        .first()
-    )
 
         if existing:
             raise HTTPException(

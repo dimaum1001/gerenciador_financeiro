@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { eachMonthOfInterval, endOfMonth, format, startOfMonth, subMonths } from 'date-fns'
+import { addMonths, eachMonthOfInterval, endOfMonth, format, startOfMonth, subMonths } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { useApi } from '@/contexts/ApiContext'
 
@@ -257,8 +257,9 @@ export default function TransactionsPage() {
   const [feedback, setFeedback] = useState('')
 
   const availableMonths = useMemo(() => {
-    const end = startOfMonth(new Date())
-    const start = subMonths(end, 59)
+    const currentMonth = startOfMonth(new Date())
+    const start = subMonths(currentMonth, 59)
+    const end = addMonths(currentMonth, 1)
     return eachMonthOfInterval({ start, end }).reverse().map((date) => ({
       value: format(date, 'yyyy-MM'),
       year: format(date, 'yyyy'),
@@ -309,7 +310,7 @@ export default function TransactionsPage() {
   const categoriesQuery = useQuery({
     queryKey: ['categories'],
     queryFn: async () => {
-      const response = await api.get('/categories', { params: { limit: 500 } })
+      const response = await api.get('/categories', { params: { limit: 500, parent_id: '' } })
       return response.data.categories ?? []
     },
   })

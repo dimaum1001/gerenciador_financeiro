@@ -1,4 +1,3 @@
-import { useState, useEffect } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from '@/components/ui/toaster'
@@ -26,7 +25,9 @@ import './App.css'
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 1,
+      retry: 2,
+      retryOnMount: true,
+      refetchOnMount: 'always',
       refetchOnWindowFocus: false,
       staleTime: 5 * 60 * 1000, // 5 minutos
     },
@@ -71,6 +72,20 @@ function PublicRoute({ children }) {
   return children
 }
 
+function CatchAllRoute() {
+  const { user, loading } = useAuth()
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <LoadingSpinner size="lg" />
+      </div>
+    )
+  }
+
+  return <Navigate to={user ? "/dashboard" : "/login"} replace />
+}
+
 // Componente principal das rotas
 function AppRoutes() {
   return (
@@ -105,7 +120,7 @@ function AppRoutes() {
       </Route>
       
       {/* Rota 404 */}
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      <Route path="*" element={<CatchAllRoute />} />
     </Routes>
   )
 }

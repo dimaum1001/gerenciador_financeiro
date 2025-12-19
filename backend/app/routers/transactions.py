@@ -47,6 +47,7 @@ from app.utils.locale_mapper import (
     payment_method_mapper,
     account_type_mapper,
 )
+from app.utils.pagination import paginate_query
 
 router = APIRouter()
 
@@ -462,6 +463,7 @@ def _prepare_transaction_from_row(
 
     return payload, preview_entry
 
+@router.get("", include_in_schema=False, response_model=TransactionListResponse)
 @router.get("/", response_model=TransactionListResponse)
 async def list_transactions(
     skip: int = 0,
@@ -536,11 +538,11 @@ async def list_transactions(
             )
         )
     
-    # Contar total
-    total = query.count()
-    
-    # Aplicar paginação e ordenação
-    transactions = query.order_by(desc(Transaction.data_lancamento), desc(Transaction.criado_em)).offset(skip).limit(limit).all()
+    transactions, total = paginate_query(
+        query.order_by(desc(Transaction.data_lancamento), desc(Transaction.criado_em)),
+        skip=skip,
+        limit=limit,
+    )
     
     return TransactionListResponse(
         transactions=transactions,
@@ -549,6 +551,7 @@ async def list_transactions(
         limit=limit
     )
 
+@router.post("", include_in_schema=False, response_model=TransactionResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=TransactionResponse, status_code=status.HTTP_201_CREATED)
 async def create_transaction(
     transaction_data: TransactionCreate,

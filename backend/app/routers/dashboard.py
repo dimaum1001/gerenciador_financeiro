@@ -3,7 +3,7 @@ from datetime import datetime, date, timedelta
 import calendar
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, desc, func, extract, text
+from sqlalchemy import and_, or_, desc, func, extract, text, case
 
 from app.core.deps import get_current_user, get_db
 from app.models.user import User
@@ -21,6 +21,7 @@ from app.schemas.dashboard import (
     BudgetStatusSummary,
     BudgetStatusItem,
 )
+from app.schemas.transaction import TransactionResponse
 from app.utils.locale_mapper import transaction_type_mapper
 
 router = APIRouter()
@@ -56,16 +57,24 @@ def _budget_query(db: Session, current_user: User):
 
 @router.get("/summary", response_model=DashboardSummary)
 async def get_dashboard_summary(
+    year: Optional[int] = Query(default=None, ge=2000, le=2100),
+    month: Optional[int] = Query(default=None, ge=1, le=12),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     now = datetime.now()
-    current_month = now.month
-    current_year = now.year
+    current_month = month or now.month
+    current_year = year or now.year
+    current_period_start = date(current_year, current_month, 1)
+    current_period_end = date(
+        current_year,
+        current_month,
+        calendar.monthrange(current_year, current_month)[1],
+    )
 
     total_balance = (
         _account_query(db, current_user)
-        .with_entities(func.sum(Account.saldo_atual))
+        .with_entities(func.coalesce(func.sum(Account.saldo_inicial), 0))
         .filter(Account.ativo.is_(True))
         .scalar()
         or 0
@@ -73,68 +82,124 @@ async def get_dashboard_summary(
 
     demo_condition = Transaction.is_demo_data.is_(current_user.is_demo)
 
-    monthly_income = db.query(func.sum(Transaction.valor)).filter(
-        and_(
-            Transaction.user_id == current_user.id,
-            demo_condition,
-            Transaction.tipo == TransactionType.INCOME,
-            extract("year", Transaction.data_lancamento) == current_year,
-            extract("month", Transaction.data_lancamento) == current_month,
-        )
-    ).scalar() or Decimal("0")
-
-    monthly_expenses = db.query(func.sum(Transaction.valor)).filter(
-        and_(
-            Transaction.user_id == current_user.id,
-            demo_condition,
-            Transaction.tipo == TransactionType.EXPENSE,
-            extract("year", Transaction.data_lancamento) == current_year,
-            extract("month", Transaction.data_lancamento) == current_month,
-        )
-    ).scalar() or Decimal("0")
-
-    monthly_income = float(monthly_income)
-    monthly_expenses = float(monthly_expenses)
-    monthly_savings = monthly_income + monthly_expenses
-
     prev_month = current_month - 1 if current_month > 1 else 12
     prev_year = current_year if current_month > 1 else current_year - 1
+    prev_period_start = date(prev_year, prev_month, 1)
+    prev_period_end = date(prev_year, prev_month, calendar.monthrange(prev_year, prev_month)[1])
 
-    prev_income = db.query(func.sum(Transaction.valor)).filter(
-        and_(
+    tx_totals = (
+        db.query(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                Transaction.tipo == TransactionType.INCOME,
+                                Transaction.data_lancamento >= current_period_start,
+                                Transaction.data_lancamento <= current_period_end,
+                            ),
+                            Transaction.valor,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("current_income"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                Transaction.tipo == TransactionType.EXPENSE,
+                                Transaction.data_lancamento >= current_period_start,
+                                Transaction.data_lancamento <= current_period_end,
+                            ),
+                            Transaction.valor,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("current_expenses_raw"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                Transaction.tipo == TransactionType.INCOME,
+                                Transaction.data_lancamento >= prev_period_start,
+                                Transaction.data_lancamento <= prev_period_end,
+                            ),
+                            Transaction.valor,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("prev_income"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                Transaction.tipo == TransactionType.EXPENSE,
+                                Transaction.data_lancamento >= prev_period_start,
+                                Transaction.data_lancamento <= prev_period_end,
+                            ),
+                            Transaction.valor,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("prev_expenses_raw"),
+        )
+        .filter(
             Transaction.user_id == current_user.id,
             demo_condition,
-            Transaction.tipo == TransactionType.INCOME,
-            extract("year", Transaction.data_lancamento) == prev_year,
-            extract("month", Transaction.data_lancamento) == prev_month,
+            Transaction.data_lancamento >= prev_period_start,
+            Transaction.data_lancamento <= current_period_end,
         )
-    ).scalar() or Decimal("0")
+        .one()
+    )
 
-    prev_expenses = db.query(func.sum(Transaction.valor)).filter(
-        and_(
-            Transaction.user_id == current_user.id,
-            demo_condition,
-            Transaction.tipo == TransactionType.EXPENSE,
-            extract("year", Transaction.data_lancamento) == prev_year,
-            extract("month", Transaction.data_lancamento) == prev_month,
-        )
-    ).scalar() or Decimal("0")
+    monthly_income = float(tx_totals.current_income or 0)
+    monthly_expenses_value = float(abs(tx_totals.current_expenses_raw or 0))
+    monthly_savings = monthly_income - monthly_expenses_value
 
-    prev_income = float(prev_income)
-    prev_expenses = float(prev_expenses)
+    prev_income = float(tx_totals.prev_income or 0)
+    prev_expenses_value = float(abs(tx_totals.prev_expenses_raw or 0))
 
     income_change = ((monthly_income - prev_income) / prev_income * 100) if prev_income != 0 else 0
-    expenses_change = ((abs(monthly_expenses) - abs(prev_expenses)) / abs(prev_expenses) * 100) if prev_expenses != 0 else 0
+    expenses_change = (
+        ((monthly_expenses_value - prev_expenses_value) / prev_expenses_value * 100)
+        if prev_expenses_value != 0
+        else 0
+    )
 
     return DashboardSummary(
         total_balance=float(total_balance),
         monthly_income=monthly_income,
-        monthly_expenses=float(abs(monthly_expenses)),
+        monthly_expenses=monthly_expenses_value,
         monthly_savings=float(monthly_savings),
         income_change=float(income_change),
         expenses_change=float(expenses_change),
         current_month=current_month,
         current_year=current_year,
+    )
+
+
+@router.get("/recent-transactions", response_model=List[TransactionResponse])
+async def get_recent_transactions(
+    limit: int = Query(default=5, ge=1, le=50),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return (
+        _transaction_query(db, current_user)
+        .order_by(desc(Transaction.data_lancamento), desc(Transaction.criado_em))
+        .limit(limit)
+        .all()
     )
 
 
@@ -387,6 +452,9 @@ async def get_budget_status(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    period_start = date(year, month, 1)
+    period_end = date(year, month, calendar.monthrange(year, month)[1])
+
     budgets = (
         _budget_query(db, current_user)
         .filter(Budget.ano == year, Budget.mes == month)
@@ -408,21 +476,30 @@ async def get_budget_status(
     status_counts = {"good": 0, "warning": 0, "exceeded": 0}
     budget_items: List[BudgetStatusItem] = []
 
-    for budget in budgets:
-        spent = (
-            _transaction_query(db, current_user)
-            .with_entities(func.sum(Transaction.valor))
-            .filter(
-                Transaction.category_id == budget.category_id,
-                Transaction.tipo == TransactionType.EXPENSE,
-                extract("year", Transaction.data_lancamento) == year,
-                extract("month", Transaction.data_lancamento) == month,
-            )
-            .scalar()
-            or Decimal("0")
-        )
+    category_ids = {budget.category_id for budget in budgets}
 
-        spent_value = float(abs(spent))
+    categories = _category_query(db, current_user).filter(Category.id.in_(category_ids)).all()
+    category_by_id = {category.id: category for category in categories}
+
+    spent_rows = (
+        _transaction_query(db, current_user)
+        .with_entities(
+            Transaction.category_id.label("category_id"),
+            func.coalesce(func.sum(Transaction.valor), 0).label("total"),
+        )
+        .filter(
+            Transaction.tipo == TransactionType.EXPENSE,
+            Transaction.category_id.in_(category_ids),
+            Transaction.data_lancamento >= period_start,
+            Transaction.data_lancamento <= period_end,
+        )
+        .group_by(Transaction.category_id)
+        .all()
+    )
+    spent_by_category = {row.category_id: float(abs(row.total or 0)) for row in spent_rows}
+
+    for budget in budgets:
+        spent_value = float(spent_by_category.get(budget.category_id, 0.0))
         planned_value = float(budget.valor_planejado or 0)
         percentage = (spent_value / planned_value * 100) if planned_value > 0 else 0
 
@@ -437,7 +514,7 @@ async def get_budget_status(
         total_planned += planned_value
         total_spent += spent_value
 
-        category = _category_query(db, current_user).filter(Category.id == budget.category_id).first()
+        category = category_by_id.get(budget.category_id)
 
         budget_items.append(
             BudgetStatusItem(

@@ -195,16 +195,46 @@ export const useUpdateBudget = (options) => useApiUpdate('/budgets', options)
 export const useDeleteBudget = (options) => useApiDelete('/budgets', options)
 
 // Dashboard
-export const useDashboardSummary = (options = {}) => {
+export const useDashboardSummary = (yearOrOptions, month, options = {}) => {
   const { api } = useApi()
-  
+
+  let year = yearOrOptions
+  let resolvedMonth = month
+  let queryOptions = options
+
+  // Backward compatible: useDashboardSummary(options)
+  if (typeof yearOrOptions === 'object' && yearOrOptions !== null) {
+    queryOptions = yearOrOptions
+    year = undefined
+    resolvedMonth = undefined
+  }
+
   return useQuery({
-    queryKey: ['dashboard', 'summary'],
+    queryKey: ['dashboard', 'summary', year ?? null, resolvedMonth ?? null],
     queryFn: async () => {
-      const response = await api.get('/dashboard/summary')
+      const params = new URLSearchParams()
+      if (year) params.set('year', String(year))
+      if (resolvedMonth) params.set('month', String(resolvedMonth))
+
+      const query = params.toString()
+      const response = await api.get(query ? `/dashboard/summary?${query}` : '/dashboard/summary')
       return response.data
     },
     staleTime: 2 * 60 * 1000, // 2 minutos
+    ...queryOptions,
+  })
+}
+
+export const useRecentTransactions = (limit = 5, options = {}) => {
+  const { api } = useApi()
+
+  return useQuery({
+    queryKey: ['dashboard', 'recent-transactions', limit],
+    queryFn: async () => {
+      const response = await api.get(`/dashboard/recent-transactions?limit=${limit}`)
+      return response.data ?? []
+    },
+    staleTime: 60 * 1000, // 1 minuto
     ...options
   })
 }
